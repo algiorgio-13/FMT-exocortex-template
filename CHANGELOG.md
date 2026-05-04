@@ -5,6 +5,63 @@ All notable changes to FMT-exocortex-template will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.29.24] — 2026-05-02
+
+### Fixed — Architecture A: IWE_GOVERNANCE_REPO env var in launchd plist templates
+
+- **`roles/strategist/scripts/launchd/com.strategist.morning.plist`** и **`com.strategist.weekreview.plist`**: добавлен `IWE_GOVERNANCE_REPO={{GOVERNANCE_REPO}}` в `EnvironmentVariables`. launchd не загружает `~/.zshenv`, без этого `strategist.sh` использовал fallback `DS-strategy` вместо реального имени governance-репо пользователя.
+
+### Changed — WP-268 Ф8 + Architecture A: миграция strategist на template-форму
+
+- **`roles/strategist/scripts/strategist.sh`**: перевод на template-форму (`{{WORKSPACE_DIR}}/{{GOVERNANCE_REPO}}`, `{{CLAUDE_PATH}}`). Конкретные значения теперь только в `.iwe-runtime/` (генерируется `build-runtime.sh`).
+- **`roles/strategist/prompts/*.md`** (10 файлов): `DS-strategy` → `{{GOVERNANCE_REPO}}`. `strategist.sh` подставляет `$IWE_GOVERNANCE_REPO` через sed в runtime.
+- **`roles/strategist/scripts/cleanup-processed-notes.py`**: читает `IWE_GOVERNANCE_REPO` из env (fallback: `DS-strategy`).
+- **`roles/synchronizer/scripts/dt-collect-neon.py`**: удалены ADR-009 dual-write блоки к `development.user_events` (WP-268 cleanup).
+
+Коммиты: `404a304`, `7c6960a`
+
+## [0.29.23] — 2026-05-01
+
+### Added — WP-245 Ф28.2: скиллы personal-guide-start и personal-guide-render
+
+- **`/personal-guide-start`** — bootstrap репо `personal-guide` на GitHub пилота (один раз). Создаёт репо через Aisystant MCP, делегирует наполнение render-скиллу.
+- **`/personal-guide-render`** — наполнение 6 файлов (profile, worldview, methods, README, weekly/, daily/) из Память.Derived + Персона. Вызывается повторно при обновлениях.
+
+Пилот в своём Claude Code: `/personal-guide-start` → GitHub OAuth → 6 файлов в репо.
+
+Commit: `150ed2c`
+
+## [0.29.22] — 2026-05-01
+
+### Fixed — WP-139 Ф8.1: парсер мультипликатора (block-split bug)
+
+В `roles/synchronizer/scripts/dt-collect.sh` функция `parse_weekplan_budget_for_date`:
+
+- **Было:** `section_re = re.compile(rf'Итоги\s+\S+\s+{day_num}\s+{month_ru}')` — `\S+` матчил `W16:` в заголовке недели «Итоги W16: 13 апр» раньше дневного «Итоги пн 13 апр»
+- **Стало:** `re.compile(rf'Итоги\s+(?:пн|вт|ср|чт|пт|сб|вс)\s+{day_num}\s+{month_ru}', re.IGNORECASE)` — матчит только дневные итоги с именованным днём недели
+
+**Эффект:** недельный бюджет за W16 = 116.05h → 132.55h (Пн 13 апр теперь находится). Множитель Week Close корректен без ручной корректировки.
+
+Commit: `8e79aa0`
+
+## [0.29.21] — 2026-04-30
+
+### Added — WP-217 Ф10: Memory Lifecycle Protocol
+
+Четыре скрипта валидации и управления памятью (`scripts/`):
+
+- **`memory-validate.sh`** — frontmatter-гейт: проверяет 9 обязательных полей (name, description, type, horizon, domains, status, valid_from, owner, schema_version), допустимые значения, инвариант `superseded→superseded_by`
+- **`memory-health.sh`** — метрики: кол-во файлов, HOT-лимит (≤150 строк), orphans%, распределение по горизонтам
+- **`memory-bleed.sh`** — детектор нарушений: HOT overflow, orphans без frontmatter, superseded без ссылки, TTL-кандидаты на понижение горизонта
+- **`memory-migrate.sh`** — автодобавление отсутствующих полей (type/horizon/domains/status/owner/schema_version/name/description/valid_from) с инференцией по имени файла; `--dry-run` и `--all` режимы
+
+Интеграция в Close-протоколы:
+
+- **`week-close/SKILL.md`** — добавлен шаг **7c Memory Validate** (T22b): `bash ${IWE_SCRIPTS}/memory-bleed.sh`; нарушения → исправить до коммита, кандидаты понижения → информативно
+- **`month-close/SKILL.md`** — обновлён шаг **1f**: конкретные команды `memory-health.sh` + `memory-bleed.sh` вместо описательного текста
+
+Commit: `84dd6dc`
+
 ## [0.29.20] — 2026-04-29
 
 ### Fixed — protocol-close.md: pre-commit checks ambiguity (Eugene's report)
