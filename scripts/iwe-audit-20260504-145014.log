@@ -1,0 +1,117 @@
+# IWE Installation Audit — 2026-05-04 14:37
+
+_Root:_ `/Users/algiorgio/Private/SystemsWorld/IWE/Exocortex`
+
+## 1. Inventory (структура файлов)
+
+| Файл | Статус | Примечание |
+|---|---|---|
+| `CLAUDE.md` | ✅ |  |
+| `MEMORY.md` | ✅ | в memory/MEMORY.md (auto-memory layout) |
+| `.claude/sync-manifest.yaml` | ✅ |  |
+| `.claude/rules/distinctions.md` | ✅ |  |
+| `.claude/rules/formatting.md` | ✅ |  |
+| `.claude/skills/day-open/SKILL.md` | ✅ |  |
+| `.claude/skills/day-close/SKILL.md` | ✅ |  |
+| `memory/protocol-open.md` | ✅ |  |
+| `memory/protocol-work.md` | ✅ |  |
+| `memory/protocol-close.md` | ✅ |  |
+| `FMT-exocortex-template/update.sh` | ✅ | self-update запускается отсюда |
+| `scripts/iwe-drift.sh` | ✅ | FMT-exocortex-template/scripts/iwe-drift.sh (source-of-truth для user-mode) |
+| `params.yaml` | ✅ |  |
+| `DS-strategy/` | ✅ | git-репо (is_git=true) |
+
+**coverage:** 14/14 (отсутствует: критичных=0, опциональных=0)
+
+## 2. L1 drift (платформа vs FMT)
+
+## Drift-отчёт (2026-05-04)
+
+| lag (дней) | ID | relation | статус | владелец | симптом |
+|---:|---|---|---|---|---|
+| 4 | protocols-to-skills | reference | warn | agent | Скилл выполняет протокол не так, как описано в memory/protocol-close.md |
+| 4 | protocol-open-to-day-open-skill | reference | warn | agent | Day Open работает не по protocol-open.md |
+| ? | wp-status-legend-drift | reconciliation | missing | R1 | Скрипты-потребители (linear-sync, day-close) перестают сходиться с реестром: новый статус-эмодзи не задокументирован в легенде, или active-id строка имеет terminal-status (или наоборот) |
+| ? | staging-validated-to-fmt | reconciliation | missing | human | Правило `validated` в STAGING.md не промотировано в FMT более 3 недель |
+| ? | arch-version-drift | reference | missing | R1 | ARCH-документ обновлён (bump version), но downstream-документы с `derived_from: <ID>@vX.Y` не пересмотрены |
+| 0 | staging-promotion | ok |  |  |  |
+| 0 | lesson-hygiene | ok |  |  |  |
+
+## 3. DS-strategy
+
+**Uncommitted changes:** 0
+
+### Diff с FMT-strategy-template
+
+_Источник шаблона: `FMT-exocortex-template/templates/strategy-skeleton`_
+
+**Различий (файловый уровень):** 30 (показаны топ-30)
+
+```
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: .git
+Files /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/CLAUDE.md and /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton/CLAUDE.md differ
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton: README.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: REPO-TYPE.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: WORKPLAN.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/archive: day-plans
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/archive: notes
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/archive: week-plans
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/archive: week-reports
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/archive: wp-contexts
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/current: Daily Schedule v1.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton/current: README.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/current: WeekPlan W19 2026-05-04.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: decisions
+Files /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/docs/Dissatisfactions.md and /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton/docs/Dissatisfactions.md differ
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/docs: G0-overview.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/docs: Session Agenda.md
+Files /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/docs/Strategy.md and /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton/docs/Strategy.md differ
+Files /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/docs/WP-REGISTRY.md and /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton/docs/WP-REGISTRY.md differ
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/docs: anti-procrastination-protocol.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: drafts
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: exocortex
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox: .gitkeep
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox: CBT-procrastination-W18.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox: bugs
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox: captures.md
+Files /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox/fleeting-notes.md and /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/FMT-exocortex-template/templates/strategy-skeleton/inbox/fleeting-notes.md differ
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox: lengold-integration.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy/inbox: regulation-setup.md
+Only in /Users/algiorgio/Private/SystemsWorld/IWE/Exocortex/DS-strategy: personal
+```
+
+## 4. User customizations (L3)
+
+### Extensions
+
+_extensions/ директория отсутствует — расширения не настроены_
+
+### params.yaml — отличия от шаблона
+
+_Полное совпадение со skeleton._
+
+### AUTHOR-ONLY зоны
+
+✅ Найдены маркеры L3:
+- блоков `<!-- AUTHOR-ONLY -->`: 1
+
+## 5. Update prerequisites
+
+### Бинарники
+
+| Бинарник | Статус | Путь |
+|---|---|---|
+| `git` | ✅ | /usr/bin/git |
+| `curl` | ✅ | /usr/bin/curl |
+| `python3` | ✅ | /Users/algiorgio/.cache/uv/environments-v2/check-json-rfc-72d1134bc7183daf/bin/python3 |
+
+### Конфигурация (.exocortex.env)
+
+✅ `GITHUB_USER=algiorgio-13` заполнен
+
+### Состояние FMT-exocortex-template
+
+✅ `FMT-exocortex-template/` чистый (ветка `main`)
+
+**Вердикт раздела:** ✅ всё готово к `update.sh`.
+
