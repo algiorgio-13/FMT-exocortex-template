@@ -31,7 +31,6 @@
 #### 1. Открытие сессии
 
 - Найди `WeekPlan W*.md` со `status: draft` в `{{GOVERNANCE_REPO}}/current/`
-- **Loop C input (WP-364 Ф2.2):** проверь `{{WORKSPACE_DIR}}/{{GOVERNANCE_REPO}}/current/weekly-digest.md`. Если файл есть и `valid_until ≥ today` — прочитай его как **supplementary input от Аналитика**: коммиты недели, закрытые РП, кандидаты bottleneck'а. Стратег (пилот) не обязан следовать кандидатам — это сырьё для собственного решения. Если файла нет или просрочен — пропусти этот пункт, работай по черновику и истории.
 - Покажи пользователю краткую сводку: повестка, ключевые вопросы, carry-over
 - Если сегодня первая сессия месяца — также упомяни ключевые цифры из MonthClose (мультипликатор, фаза, ✅/🔄 R)
 - Спроси: «Начнём по повестке или есть срочные вопросы?»
@@ -65,7 +64,7 @@
 
 > Реализует Фазу 2b метода `PD.METHOD.008` (стратегирование). Алгоритм рекомендации Стратегом — `PD.METHOD.018` § Механизм рекомендации Стратегом. Различение C_vis vs C_act — `PD.FORM.091 §6.1`.
 
-1. **Прочитай трекер:** `{{WORKSPACE_DIR}}/{{GOVERNANCE_REPO}}/docs/Caliber-artifacts-tracker.md` (если файла нет — создай из шаблона `{{WORKSPACE_DIR}}/FMT-exocortex-template/templates/strategy-skeleton/docs/Caliber-artifacts-tracker.md`)
+1. **Прочитай трекер:** `{{WORKSPACE_DIR}}/{{GOVERNANCE_REPO}}/Lifework/Caliber-artifacts-tracker.md` (если файла нет — создай из шаблона `{{WORKSPACE_DIR}}/FMT-exocortex-template/templates/strategy-skeleton/Lifework/Caliber-artifacts-tracker.md`)
 2. **Измерь C_vis:** max системный уровень в `Dissatisfactions.md` с фильтром «≥2 НЭП на уровне» (одиночный НЭП на высоком уровне = сигнал, не калибр видения)
 3. **Измерь C_act:** max уровень охвата (`PD.FORM.090`) с lifework-документом, действующим ≥6 мес. Читай из `{{WORKSPACE_DIR}}/{{GOVERNANCE_REPO}}/Lifework/` (там живут личные документы). Если папки нет или пуста — C_act=0, рекомендуй создать Личный устав (уровень 1) первым, взяв шаблон из `PACK-personal/.../lifework-templates/lifework-self-charter-template.md`
 4. **Объяви разрыв:** «C_vis=N, C_act=M, зона роста = [M+1..N]»

@@ -6,7 +6,7 @@ type: reference
 horizon: warm
 domains: [reference]
 status: active
-owner: user
+owner: platform
 schema_version: 1
 
 name: "navigation"
@@ -88,5 +88,5 @@ description: "Операционный файл памяти IWE"
 
 ## WP Context Files
 
-> Все context files: `DS-strategy/inbox/WP-{N}-{slug}.md`
+> Все context files: `DS-strategy/inbox/WP-{N}/WP-{N}.md` (всегда папка — WP-434)
 > Архив: `DS-strategy/archive/wp-contexts/`

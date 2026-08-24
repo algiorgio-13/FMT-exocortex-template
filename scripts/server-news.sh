@@ -22,21 +22,14 @@ CONFIG="${1:-$IWE/$GOV_REPO/exocortex/day-rhythm-config.yaml}"
 MAX_ITEMS_PER_TOPIC=3
 MAX_AGE_DAYS=2
 
-# --- Выбираем python3 с PyYAML (NixOS: scheduler env имеет yaml, base не имеет) ---
-_find_python3() {
-  if python3 -c "import yaml" 2>/dev/null; then echo "python3"; return; fi
-  local p
-  for p in \
-    /nix/store/aj1smkrsnv16lbz9g8qancb04b3kv0va-python3-3.12.8-env/bin/python3 \
-    /usr/bin/python3 /usr/local/bin/python3; do
-    [[ -x "$p" ]] && "$p" -c "import yaml" 2>/dev/null && { echo "$p"; return; }
-  done
-  find /nix/store -maxdepth 3 -name "python3" -path "*env*/bin/*" 2>/dev/null | while read -r p; do
-    "$p" -c "import yaml" 2>/dev/null && { echo "$p"; return; }
-  done
-  echo "python3"
-}
-PYTHON3=$(_find_python3)
+# --- Pick a python3 that has PyYAML (shared resolver, WP-529 F6 / #463) ---
+# The resolver additionally knows the Homebrew python3 location on stock macOS
+# Apple Silicon and fails loud instead of returning a yaml-less interpreter.
+RESOLVER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/find-python3.sh"
+if ! PYTHON3=$("$RESOLVER"); then
+    echo "**Мир:** ⚠️ PENDING — не найден python3 с библиотекой PyYAML. Установить: pip3 install pyyaml (или sudo apt install python3-yaml); см. requirements.txt"
+    exit 0
+fi
 
 $PYTHON3 << PYEOF
 import sys, json, subprocess, xml.etree.ElementTree as ET
@@ -127,7 +120,9 @@ def parse_rss(xml_text, feed_url):
                 title = title_el.text if title_el is not None else "(без заголовка)"
                 link_el = entry.find(f"{{{atom_ns}}}link")
                 link = link_el.get("href", "") if link_el is not None else ""
-                date_el = entry.find(f"{{{atom_ns}}}updated") or entry.find(f"{{{atom_ns}}}published")
+                date_el = entry.find(f"{{{atom_ns}}}updated")
+                if date_el is None:
+                    date_el = entry.find(f"{{{atom_ns}}}published")
                 pub_date = parse_date(date_el.text if date_el is not None else "")
                 items.append({"title": title, "link": link, "date": pub_date})
             return items
@@ -138,7 +133,9 @@ def parse_rss(xml_text, feed_url):
             title = title_el.text if title_el is not None else "(без заголовка)"
             link_el = item.find("link")
             link = (link_el.text or "") if link_el is not None else ""
-            date_el = item.find("pubDate") or item.find("{http://purl.org/dc/elements/1.1/}date")
+            date_el = item.find("pubDate")
+            if date_el is None:
+                date_el = item.find("{http://purl.org/dc/elements/1.1/}date")
             pub_date = parse_date(date_el.text if date_el is not None else "")
             items.append({"title": title, "link": link, "date": pub_date})
 

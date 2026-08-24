@@ -2,7 +2,7 @@
 name: day-close
 description: "Протокол закрытия дня (Day Close). Алиас для /run-protocol close day — симметрия с /day-open."
 argument-hint: ""
-version: 1.0.0
+version: 1.1.0
 layer: L1
 status: active
 triggers:
@@ -28,240 +28,148 @@ Day Close = протокол. Исполнять ТОЛЬКО пошагово �
 ## Алгоритм
 
 ### 0. Extensions (before)
-Загрузить: `bash .claude/scripts/load-extensions.sh day-close before`. Exit 0 → `Read` каждый файл из вывода (alphabetic) → выполнить как первые шаги. Exit 1 → пропустить. Поддерживает `extensions/day-close.before.md` И `extensions/day-close.before.<suffix>.md`.
+`bash .claude/scripts/load-extensions.sh day-close before` → exit 0: `Read` каждый файл из вывода (alphabetic) → выполнить как первые шаги. Поддерживает `extensions/day-close.before.md` И `extensions/day-close.before.<suffix>.md`.
 
-### 1. Extensions (checks)
-Загрузить: `bash .claude/scripts/load-extensions.sh day-close checks`. Exit 0 → `Read` каждый файл из вывода (alphabetic) → выполнить. Exit 1 → пропустить. Поддерживает `extensions/day-close.checks.md` И `extensions/day-close.checks.<suffix>.md`.
+### 0б. Дайджест — token discipline (issue #234)
+`bash "$IWE_SCRIPTS/day-close-prepare.sh"` — один вызов вместо ~10 скан-запросов. Пронумерованные секции дайджеста ЗАМЕНЯЮТ скан-команды внутри шагов ниже (сами шаги исполняются — но берут данные из дайджеста, не перезапускают сканы): §1→шаг 1, §2→10b, §3→2d, §4→4б, §5→4в, §6→4, §7→6, §8→6 (prerequisite), §9-10→3, §11→2f. Реагировать только на flagged-пункты; drift-хит, который реально «ждёт X», — не drift. Скрипт отсутствует → legacy: inline-команды шагов.
+**Субагентное исполнение (рекомендуется при большой сессии дня):** родитель выполняет только дайджест → диспетчеризацию → согласование (шаг 8) → верификацию; шаги 1-7 исполняет ОДИН general-purpose субагент (sonnet, context isolation) с дайджестом в промпте, шаги 9-10b — субагент-финализатор с `day-close-prepare.sh --verify` вместо inline-grep 9a/9b; шаг 11 (R23) диспетчеризует родитель — субагент не может звать субагентов. Fallback: Agent tool недоступен / субагент упал дважды → исполнять inline, всё равно с дайджестом.
+<!-- Детали фаз: day-close-details.md § Шаг 0б -->
 
-> **Постусловия:** если checks-файлы выполнились — `## Итоги дня` обновлён в Obsidian-заметке текущего дня; маркер `.krisp-done` за сегодня поставлен (если есть Krisp-расширение).
+> **Best practice:** запускать `/day-close` в свежей сессии, не хвостом рабочей — протоколу нужны файлы на диске, а не разговор за день.
 
-### 2. Сбор данных
+### 0в. Strategy_day guard (issue #286)
+Проверить `day_open.strategy_day` в `day-rhythm-config.yaml` (тот же ключ, что читает `/day-open`, по умолчанию `monday`) против дня недели сегодня. Симметрично `/day-open` (SKILL.md шаг 4: «Если `strategy_day` → DayPlan НЕ создавать»): в стратегический день `current/DayPlan <дата>.md` не создавался — шаги 1, 2b, 3, 9a **неприменимы** (не FAIL), см. пометки внутри них. Итоги дня идут только в WeekReport (шаг 9b), как и предписывает § ниже.
+<!-- Детали: day-close-details.md § Шаг 0в -->
 
-```bash
-for repo in $(ls {{HOME_DIR}}/IWE/); do
-  if [ -d {{HOME_DIR}}/IWE/$repo/.git ]; then
-    commits=$(git -C {{HOME_DIR}}/IWE/$repo log --since="today 00:00" --oneline --no-merges 2>/dev/null \
-      | grep -vE "^(docs|chore|ci|style|perf|test)(\\(|:| )" \
-      | grep -vE "memory/|\.claude/rules/|template-sync|backup|reindex" \
-      || true)
-    [ -n "$commits" ] && echo "=== $repo ===" && echo "$commits"
-  fi
-done
-```
+### 1. Сбор данных
+**Strategy_day (шаг 0в) → неприменимо, пропустить** (нет DayPlan, сверять таблицу «На сегодня» не с чем). Иначе: запустить bash-скрипт сбора коммитов за день по всем git-репо в `{{HOME_DIR}}/IWE/`. Сопоставить с таблицей «На сегодня» из DayPlan → определить статусы.
+<!-- Детали: day-close-details.md § Шаг 1 -->
 
-Сопоставить коммиты с таблицей «На сегодня» из DayPlan → определить статусы.
+### 2. Governance batch
+**2a.** WeekPlan (`current/Plan W{N}...`): обновить статусы РП — grep по номеру РП, обновить ВСЕ упоминания.
+**2b.** **Strategy_day (шаг 0в) → неприменимо, пропустить** (DayPlan не создавался). Иначе: DayPlan `current/DayPlan YYYY-MM-DD.md`: статусы ВСЕХ строк (РП + ad-hoc). Done → зачеркнуть.
+**2c.** `docs/WP-REGISTRY.md`: статусы + даты.
+**2d.** `inbox/open-sessions.log`: удалить строки закрытых сессий.
+**2e.** Новые репо/сервисы за день? → REPOSITORY-REGISTRY, navigation.md, MAP.002.
+**2f.** WeekReport — если есть `WeekReport W{N}.md`: добавить `<details><summary><b>Итоги {День} {Дата}</b></summary>` **перед** предыдущими итогами (обратная хронология).
+<!-- Детали 2f: day-close-details.md § Шаг 2f -->
 
-### 3. Governance batch
+**EXTENSION POINT (checks):** `bash .claude/scripts/load-extensions.sh day-close checks` → exit 0: `Read` каждый файл → выполнить.
 
-**3a.** Обновить WeekPlan (`${IWE_GOVERNANCE_REPO:-DS-strategy}/current/Plan W{N}...`): статусы РП. **Grep по номеру РП** — обновить ВСЕ упоминания.
-
-**3b.** Обновить DayPlan `${IWE_GOVERNANCE_REPO:-DS-strategy}/current/DayPlan YYYY-MM-DD.md`: статусы ВСЕХ строк (РП + ad-hoc). Done → зачеркнуть.
-
-**3c.** Обновить `${IWE_GOVERNANCE_REPO:-DS-strategy}/docs/WP-REGISTRY.md`: статусы + даты.
-
-**3d.** Обновить `${IWE_GOVERNANCE_REPO:-DS-strategy}/inbox/open-sessions.log`: удалить строки закрытых сессий.
-
-**3e.** Governance-синхронизация: новые репо/сервисы за день? → REPOSITORY-REGISTRY, navigation.md, MAP.002.
-
-**3f. WeekReport — ФАКТЫ ДНЯ (новый шаг, ОПТ-5):** Если Week Open завершена (есть WeekReport W{N}.md):
-  - Открыть `${IWE_GOVERNANCE_REPO:-DS-strategy}/current/WeekReport W{N} YYYY-MM-DD.md`
-  - Добавить новый раздел `<details><summary><b>Итоги {День} {Дата}</b></summary>` **перед** `Итоги Пн-Вс` (в обратном порядке дат: сегодня → старше)
-  - Содержимое: коммиты по репо, РП-статусы за день, carry-over блокеры
-  - Формат: смотреть существующие разделы в WeekReport (таблицы, метрики, мультипликатор)
-  - **Правило ОПТ-5:** WeekPlan содержит ТОЛЬКО намерения (план, carry-over на завтра), WeekReport содержит ТОЛЬКО факты (что было, коммиты, результаты)
-  - **strategy_day (Пн без DayPlan):** Итоги пишутся в WeekReport как обычный день — только факты (РП-результаты, коммиты, мультипликатор). Плановые строки (`strategy_day → план живёт в WeekPlan`) в WeekReport НЕ копировать. Позиция в обратной хронологии: если Пн — ставить в конец (самый старый день недели).
-
-### 4. Архивация
-
-- **DayPlan сегодняшнего дня** → `git mv current/DayPlan $(date +%Y-%m-%d).md archive/day-plans/`. Если есть DayPlan'ы прошлых дней в `current/` (накопленный мусор) — заархивировать их тоже одной командой.
+### 3. Архивация
+- **Strategy_day (шаг 0в) → архивацию DayPlan сегодня пропустить** (не создавался — нечего архивировать). DayPlan'ы прошлых дней в `current/` (мусор) — заархивировать в любом случае.
+- Иначе: DayPlan сегодня → `git mv current/DayPlan $(date +%Y-%m-%d).md archive/day-plans/`.
 - Done WP context files → `mv inbox/WP-{N}-*.md → archive/wp-contexts/`
-- Done РП → удалить строку из MEMORY.md (они уже в WP-REGISTRY и WeekPlan)
+- Done РП → удалить строку из MEMORY.md. MEMORY.md хранит ТОЛЬКО активные РП.
 
-> MEMORY.md хранит ТОЛЬКО активные РП (in_progress + pending). Done = удалить.
-> Архивация DayPlan ОБЯЗАТЕЛЬНА: следующий Day Open читает carry-over из `archive/day-plans/DayPlan {вчера}.md` и предполагает, что `current/` чистый.
+### 4б. Memory Drift Scan
+Две независимые проверки (issue #326 — лексическая одна пропускала расхождения статуса без триггерных слов):
+1. **Структурная:** `python3 ${IWE_TEMPLATE:-{{HOME_DIR}}/IWE/FMT-exocortex-template}/.claude/scripts/memory-drift-scan.py` — сверяет колонку «Статус» MEMORY.md с полем `status` WP-context по номеру РП. Exit 1 → для каждой найденной строки обновить устаревшее.
+2. **Лексическая:** Grep MEMORY.md на паттерны «ждёт/блокер/blocked/остановлен» (ловит текстовые блокеры без изменения статуса — отдельный класс, скрипт п.1 их не видит). Для каждого: найти WP-context, проверить статус, обновить устаревшее.
+Анонс при 0 расхождений по обеим проверкам: *«Drift-scan: N паттернов + M структурных, устаревших нет»*.
+<!-- Детали: day-close-details.md § Шаг 4б -->
 
-### 5б. Memory Drift Scan
+### 4в. Index Health Check
+`python3 ${IWE_TEMPLATE:-{{HOME_DIR}}/IWE/FMT-exocortex-template}/.claude/scripts/check-index-health.py` — для каждого FAIL/WARN: диагностика (дамп vs жанр) → перенести или пометить skip.
+<!-- Детали: day-close-details.md § Шаг 4в -->
 
-> Страховочная сетка — ловит то, что не обновили в Quick Close сессий за день.
+### 4. Lesson Hygiene
+Просмотреть «Уроки» в MEMORY.md. Не применялся >1 нед и есть в `lessons_*.md` → удалить. Новый урок → строка в MEMORY.md + `lessons_*.md`. Цель: ≤8 уроков.
 
-```bash
-grep -nE "→ ждёт|ждёт|dep:|блокер|blocked:|остановлен|ждёт согласования" \
-  {{HOME_DIR}}/.claude/projects/*/memory/MEMORY.md 2>/dev/null
-```
+### 5. Автоматические шаги
+`"$IWE_SCRIPTS/day-close.sh"` — Linear sync, downstream sync (update.sh), backup (memory/ + CLAUDE.md).
 
-Для каждого найденного паттерна:
-1. Определить номер РП (WP-NNN) из контекста строки
-2. Найти WP-context: `ls ${IWE_GOVERNANCE_REPO:-DS-strategy}/inbox/WP-{N}-*.md` (если заархивирован — `archive/wp-contexts/`)
-3. Прочитать секцию «Что узнали» / «Осталось» / финальный статус
-4. Если там есть признак закрытия (`DONE`, `РЕШЕНО`, `✅`, `починил`, `закрыт`, `снят`) рядом с тем же именем/системой → обновить MEMORY.md, анонс: *«Memory drift: [факт] устарел → обновлён»*
-5. Если WP-context не найден → отметить в итогах: *«Memory drift: WP-N — context не найден, проверить вручную»*
+### 6. Мультипликатор IWE
+> Условный шаг: если `params.yaml → multiplier_enabled: false` → пропустить и
+> при записи итогов выбрать только ветку `multiplier:off` из шаблона. Не добавлять
+> WakaTime, физическое время, формулу или заглушку «мультипликатор не посчитан».
 
-Анонс при 0 изменениях: *«Drift-scan: проверено N паттернов, устаревших фактов не найдено»*
+WakaTime CLI (`~/.wakatime/wakatime-cli --today`) или Neon-fallback → Бюджет ПО ФАКТУ / WakaTime = мультипликатор `N.Nx`. Prerequisite: прочитать `sessions/00-index.md` (grep сегодня) → список peer-сессий с числом ходов. Sanity check: <1.5x при ≥10 peer-сессий → пересчитать.
+<!-- Детали: day-close-details.md § Шаг 6 -->
 
-### 5в. Index Health Check
+### 7. Черновик итогов (показать пользователю)
+Обзор (РП × статус) + Что нового узнал + Похвала + Не забыто (dirty repos, /slot часы, мысли, обещания) + Видео + Draft-list + Задел на завтра + **Утренние приоритеты (priorities.yaml)**.
+<!-- Детали: day-close-details.md § Шаг 7 -->
 
-> Ловит раздутие индекс-файлов (MEMORY.md, WP-REGISTRY.md, MAPSTRATEGIC.md, *-registry.md, *-index.md, *-catalog.md). Правило: [feedback_memory_index_discipline.md](../../../memory/feedback_memory_index_discipline.md) — шапки и колонки индексов = hook-строки, не дамп контекста.
-
-```bash
-python3 {{HOME_DIR}}/IWE/${IWE_GOVERNANCE_REPO:-DS-strategy}/scripts/check-index-health.py
-```
-
-Для каждого FAIL/WARN в отчёте:
-1. Открыть файл, посмотреть конкретные строки/ячейки из отчёта.
-2. Диагностика: это дамп контекста (болезнь) или методологическая таблица (жанр)?
-   - Дамп → перенести контекст в source-of-truth (inbox/WP-NNN-*.md, WeekPlan, отдельный `*-changelog.md`); в индексе — hook + ссылка.
-   - Жанр (таблица-матрица, каталог доменных сущностей) → пометить в начале файла: `<!-- index-health: skip-cells -->` или `<!-- index-health: skip -->` с обоснованием в комментарии.
-3. Если FAIL в Pack-файле — не чистить автоматически, это вопрос к владельцу домена (только пометить skip с обоснованием).
-
-Анонс при 0 WARN/FAIL: *«Index-health: N файлов OK, M skip»*. При наличии — перечислить FAIL/WARN с кратким действием.
-
-### 5. Lesson Hygiene
-
-- Просмотреть секцию «Уроки» в MEMORY.md
-- Урок применялся сегодня? → оставить
-- Урок не применялся >1 нед и есть в тематическом файле (`lessons_*.md`)? → удалить из MEMORY.md
-- Новый урок за день? → записать в MEMORY.md (краткая строка) + тематический файл (подробно)
-- Цель: ≤8 уроков в MEMORY.md
-
-### 6. Автоматические шаги
-
-```bash
-"$IWE_SCRIPTS/day-close.sh"
-```
-
-Скрипт выполняет: Linear sync, downstream sync (update.sh), backup (memory/ + CLAUDE.md).
-
-### 7. Мультипликатор IWE
-
-> Условный шаг: если `params.yaml → multiplier_enabled: false` → пропустить.
-
-**Алгоритм:**
-
-1. **WakaTime** — физическое время за день:
-   - Сначала CLI: `~/.wakatime/wakatime-cli --today` (CLI не в PATH, бинарник в `~/.wakatime/`)
-   - Если CLI недоступен → **fallback Neon**: `SELECT payload->>'human_readable', payload->>'total_seconds' FROM learning.public.domain_event WHERE event_type='coding_time' AND account_id='{DT_USER_ID}' AND external_id='wakatime:{DT_USER_ID}:{YYYY-MM-DD}'`
-   - Если Neon тоже пуст (данные синхронизируются ночью) → пометить «pending Neon» и пересчитать при следующей сессии
-   - Поле: `payload->>'human_readable'` (напр. «9 hrs»); `total_seconds` для мультипликатора
-2. **Бюджет закрыт — считать ПО ФАКТУ, не по букве плана** (БЛОКИРУЮЩЕЕ, урок 27 мая):
-   - **Шаг 2.0 (обязательный prerequisite):** открыть `<governance-repo>/sessions/00-index.md`, отфильтровать строки за сегодня (`grep "$(date +%Y-%m-%d)"`), составить полный список peer-сессий с числом ходов. Без этого расчёт занижен ×2.
-   - done → полный бюджет (или пропорционально фазам для зонтичных)
-   - partial → % выполнения × бюджет; **если сверхплановая работа в плановом РП** (например, план Ф1, реализовано Ф1+Ф7) — засчитывать ФАКТ, не плановый бюджет
-   - not started → 0h
-   - **ad-hoc peer-сессии (без РП-метки в DayPlan): оценка по числу ходов**, НЕ заглушка 0.25h:
-     - 2-4 хода → 0.25-0.5h
-     - 5-7 ходов → 0.75-1h
-     - 8+ ходов → 1-1.5h
-   - **Мелкие правки/чистки без peer-сессии** (бюджет «—» / merged) → 0.25h
-3. **Мультипликатор дня** = Бюджет закрыт / WakaTime. Формат: `N.Nx`
-4. **Sanity check (БЛОКИРУЮЩЕЕ):** если получившийся мультипликатор <1.5x при дне с ≥10 peer-сессий — пересчитать (вероятен недосчёт ad-hoc или сверхпланового). Показать пилоту 3 метода (буква SKILL / по факту / компромисс) и спросить какой записывать. Урок: `lessons_multiplier_peer_sessions_uncounted.md`.
-
-### 8. Черновик итогов (показать пользователю)
-
-**а) Обзор:** таблица «что сделано» (РП × статус)
-
-**б) Что нового узнал:** captures в Pack, различения, инсайты.
-
-**в) Похвала:** что получилось, что было непросто но сделано.
-
-**г) Не забыто?**
-- Незакоммиченные изменения: `${IWE_SCRIPTS}/check-dirty-repos.sh` (сканирует ВСЕ репо в `{{WORKSPACE_DIR}}`, включая вложенные). Если есть грязные → закоммитить и запушить ДО продолжения.
-
-- **Часы саморазвития (WP-310 Ф13c):** записан ли `/slot` за сегодня? Если у пользователя есть бот-аккаунт — спросить «Сколько часов саморазвития сегодня?», предложить кнопки 0/0.5/1/2/3/4 или свой ввод. После ответа: подсказать команду `/slot N` в бот пилота (handler пишет slot_logged event с source='self_report_daily'). bh.inv обновится при следующем прогоне Аттестатора (04:35 МСК).
-- Незаписанные мысли? (спросить пользователя)
-- Обещания кому-то? (спросить пользователя)
-
-**д) Видео за день:** если `video.enabled: true` → проверить новые видео.
-
-**е) Draft-list:** Pack обогащён → предложить черновик?
-
-**ж) Задел на завтра:**
-- С чего начать утром
-- Незавершённые РП: что именно осталось (конкретный next action по каждому)
-
-### 9. Согласование
-
+### 8. Согласование
 Пользователь читает черновик → корректирует → одобряет.
 
-### 10. Запись итогов
+### 9. Запись итогов
+**9a.** **Strategy_day (шаг 0в) → неприменимо, пропустить целиком** (DayPlan не создавался — писать «Итоги дня» некуда, postcondition-grep недостижим по конструкции дня, не FAIL). Итоги стратегического дня идут только в 9b/WeekReport, как обычный день — только факты, плановые строки не копировать (day-close-details.md § strategy_day). Иначе: дописать «Итоги дня» в DayPlan (шаблон: `memory/templates-dayplan.md`, ветка по `multiplier_enabled`). Валидация: «Завтра начать с» непустое + каждый pending РП с конкретным next action. Postcondition: bash-grep по паттерну `Итоги дня|Day summary` (оба языка — issue #234: при `language: english` заголовок DayPlan «Day summary», русский grep всегда FAIL) → `9a OK/FAIL`.
 
-**10a.** Дописать секцию «Итоги дня» в DayPlan (шаблон — см. `memory/templates-dayplan.md § Шаблон итогов дня`).
-
-**Валидация «Завтра начать с» (ADR-207):** поле не пустое + каждый pending РП упомянут + каждый содержит конкретный next action (не «продолжить работу»).
-
-**Postcondition 9a (машинная проверка — НЕ пропускать):**
+При архивации DayPlan (шаг 3) — frontmatter `status: active` → `status: closed`:
 ```bash
-TODAY=$(date +%Y-%m-%d)
-grep -l "Итоги дня" ~/IWE/${IWE_GOVERNANCE_REPO:-DS-strategy}/archive/day-plans/DayPlan\ ${TODAY}.md 2>/dev/null \
-  | xargs grep -l "${TODAY}" 2>/dev/null \
-  | grep -q . && echo "9a OK" || echo "9a FAIL: итоги не найдены в DayPlan ${TODAY}"
+TODAY_DAYPLAN="${IWE_GOVERNANCE_REPO:-DS-strategy}/archive/day-plans/DayPlan $(date +%Y-%m-%d).md"
+[ -f "$TODAY_DAYPLAN" ] && sed -i.bak 's/^status: active$/status: closed/' "$TODAY_DAYPLAN" && rm -f "$TODAY_DAYPLAN.bak"
 ```
-Результат `9a FAIL` → шаг НЕ помечать completed, вернуться к записи.
+Не путать с шагом 10c ниже (P1, WP-5 Ubuntu-audit): гард day-open-pipeline.sh проверяет присутствие архивного DayPlan в git, не это поле — `status: closed` служит только людям/сторонним инструментам, не текущей реализации гарда.
+**9b.** Дописать сводку в WeekReport (`<details>`, обратная хронология). Fallback на WeekPlan если нет WeekReport. Postcondition: bash-grep по паттерну `Сводка|Results` (оба языка — issue #234) → `9b OK/FAIL`.
+`*a/*b FAIL` → НЕ помечать completed, вернуться к записи.
+<!-- Детали postconditions: day-close-details.md § Шаг 9 -->
 
-**10b.** Дописать сводку итогов в WeekReport (split, ОПТ-5 WP-297):
-- Файл: `${IWE_GOVERNANCE_REPO:-DS-strategy}/current/WeekReport W{N} YYYY-MM-DD.md` (дата = первый день недели)
-- Если файла нет (старый цикл) — fallback в WeekPlan, пометить «требует split в session-prep следующей недели»
-- Формат: `<details><summary><b>Итоги {день} {дата}</b></summary>...</details>`
-- Порядок: свежие итоги СВЕРХУ (обратная хронология). Проверять: вставлять сразу ниже `</details>` последнего W18-summary, а не в конец файла.
-- Содержание: таблица коммитов по репо, закрытые РП, продвинутые РП, мультипликатор
+### 10. Rule Classifier
+`SCRIPT="$HOME/IWE/.claude/scripts/rule-classifier.py"; [ -f "$SCRIPT" ] && python3 "$SCRIPT" || echo "skip: rule-classifier.py требует ручной установки (claude CLI + PACK-agent-rules)"` (идемпотентно, kill если >60 сек). **ДО коммита** — иначе его правки уходят в незакоммиченный хвост (issue #249).
 
-**Postcondition 9b (машинная проверка — НЕ пропускать):**
+### 10a. Extensions (after)
+`bash .claude/scripts/load-extensions.sh day-close after` → exit 0: `Read` каждый файл из вывода (alphabetic) → выполнить. Exit 1 → пропустить. Поддерживает `extensions/day-close.after.md` И `extensions/day-close.after.<suffix>.md`. Симметрично week-close (шаг 9): вызывается ДО финального коммита (10b), чтобы правки расширений попадали в тот же коммит, не оставались незакоммиченным хвостом (issue #320/#322).
+
+### 10b. Финальный коммит (все затронутые репозитории, не только governance)
+`git status --short` по КАЖДОМУ репо, который сессия трогала за день — как минимум workspace root (`{{HOME_DIR}}/IWE/`, там физически лежат `MEMORY.md` и `memory/*.md`, их правят шаги 4б/4) и `${IWE_GOVERNANCE_REPO:-DS-strategy}` (WeekPlan/DayPlan/WP-REGISTRY). Незафиксированное (включая правки шага 10a) → `git add <specific paths>` → **сторож индекса** → commit → **сторож содержимого** → push. Переходить к шагу 11 только когда `git status` чист во всех репо.
+
+> **Двойной сторож коммита (#511, дважды воспроизведённый класс «git mv + правка → пустой/устаревший дифф», корень не установлен — ишью остаётся открытым до поимки под сторожем):**
+> 1. ПЕРЕД commit: `git diff --cached --stat` — пустой вывод при непустом намерении = СТОП (ничего не застейджилось: та самая тихая потеря). Ошибку любого `git add` НЕ проглатывать — упавший add по старому пути после `git mv` означает, что часть правок не в индексе.
+> 2. ПОСЛЕ commit: сверить, что правки реально в HEAD — `git show HEAD --stat` содержит перемещённый файл, и `git diff HEAD -- <файл>` пуст (на диске нет незакоммиченных остатков правок).
+> 3. Любое срабатывание → СТОП + собрать диагностику в отчёт дня: `git status`, `git diff`, `git log -1 --stat`, точная последовательность выполненных команд — и сообщить пилоту. Это материал для установления корня #511.
+
+### 10c. Heartbeat для Day Open guard
+Пишется ПОСЛЕ push шага 10b — DayPlan уже реально закоммичен. day-open-pipeline.sh на следующий день читает этот файл как сигнал «Day Close сделан» (fallback — присутствие архивного DayPlan в git, симметрично day-open):
 ```bash
-TODAY=$(date +%Y-%m-%d)
-DAY_NUM=$(date +%-d)
-# Сначала проверь WeekReport (split ОПТ-5), fallback на WeekPlan
-( grep -rl "Итоги.*${DAY_NUM}" ~/IWE/${IWE_GOVERNANCE_REPO:-DS-strategy}/current/WeekReport\ W*.md 2>/dev/null \
-  || grep -rl "Итоги.*${DAY_NUM}" ~/IWE/${IWE_GOVERNANCE_REPO:-DS-strategy}/current/WeekPlan\ W*.md 2>/dev/null ) \
-  | grep -q . && echo "9b OK" || echo "9b FAIL: итоги не найдены ни в WeekReport, ни в WeekPlan"
-```
-Результат `9b FAIL` → шаг НЕ помечать completed, вернуться к записи.
-
-### 11. Закоммитить ${IWE_GOVERNANCE_REPO:-DS-strategy}
-
-### 11b. Rule Classifier (WP-272 Ф5.2)
-
-```bash
-python3 $HOME/IWE/.claude/scripts/rule-classifier.py
+mkdir -p ~/.claude/state
+jq -n \
+  --arg date "$(date +%Y-%m-%d)" \
+  --arg commit "$(git -C "${IWE_GOVERNANCE_REPO:-DS-strategy}" rev-parse HEAD)" \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{date: $date, commit_hash: $commit, timestamp: $ts, status: "success"}' \
+  > ~/.claude/state/day-close-last-success.json
 ```
 
-Запускается после коммита. Обогащает журнал `~/logs/rule-engine/YYYY-MM-DD.jsonl` → `YYYY-MM-DD-classified.jsonl`. Exit код игнорировать (launchd тоже запускает раз в час — идемпотентно). Не ждать завершения если >60 сек (kill).
+### 11. Верификация (Haiku R23)
+Sub-agent Haiku R23 (context isolation): передать чеклист + черновик итогов + список обновлённых файлов. По ❌ — исправить до показа пользователю.
 
-### 12. Верификация (Haiku R23)
-
-Запустить sub-agent Haiku в роли R23 Верификатор (context isolation).
-Передать: (1) чеклист Day Close, (2) черновик итогов, (3) список обновлённых файлов.
-По ❌ — исправить до показа пользователю.
+**EXTENSION POINT (checks):** `bash .claude/scripts/load-extensions.sh day-close checks` → exit 0: `Read` каждый файл → выполнить.
 
 ---
 
 ## Чеклист Day Close
 
 - [ ] Все изменения закоммичены и запушены (по всем репо)
-- [ ] Extensions checks выполнены (если файлы есть)
-- [ ] Постусловия extensions: `## Итоги дня` обновлён в Obsidian-заметке текущего дня
-- [ ] Маркер `.krisp-done` за сегодня поставлен (если есть Krisp-расширение)
-- [ ] MEMORY.md: done-РП удалены, активные актуальны, drift-scan выполнен (шаг 5б)
-- [ ] Index Health Check (шаг 5в): `check-index-health.py` — все FAIL/WARN разобраны или помечены skip
+- [ ] MEMORY.md: done-РП удалены, активные актуальны, drift-scan выполнен (шаг 4б)
+- [ ] Index Health Check (шаг 4в): все FAIL/WARN разобраны или помечены skip
 - [ ] WP-REGISTRY.md обновлён
 - [ ] WeekPlan обновлён (grep по номерам РП — ВСЕ упоминания)
-- [ ] DayPlan обновлён (статусы ВСЕХ строк: РП + ad-hoc)
+- [ ] DayPlan обновлён (статусы ВСЕХ строк: РП + ad-hoc) — **N/A на strategy_day** (шаг 0в)
 - [ ] open-sessions.log: строки закрытых сессий удалены
 - [ ] Captures за день применены (все Quick Close → KE пройден)
 - [ ] Синхронизация downstream: `update.sh` выполнен
-- [ ] Linear sync: статусы соответствуют git. Пост-sync чек: кол-во active РП в REGISTRY = кол-во active issues в Linear
+- [ ] **Синхронизация рабочих копий (поручение пилота 21.08):** все машины/копии установки ↔ GitHub синхронизированы, за исключением работающих сейчас сессий. Проверка: `git status -sb` в governance-репо (без ahead/behind) + статус sync-скрипта вторичных копий (если настроен, напр. `tsekh1-git-sync.sh --status`). «Deferred из-за живого семафора» — норма для реально работающей сессии; протухший семафор при запушенном отчёте — аномалия: закрыть семафор до завершения Day Close.
+- [ ] Linear sync: статусы соответствуют git. Кол-во active РП в REGISTRY = active issues в Linear
 - [ ] Repo CLAUDE.md: feat-коммиты → новые правила?
-- [ ] DayPlan сегодня → `archive/day-plans/` (старые DayPlan'ы в `current/` тоже)
+- [ ] DayPlan сегодня → `archive/day-plans/` (старые DayPlan'ы в `current/` тоже) — **DayPlan сегодня N/A на strategy_day** (шаг 0в), старые — архивировать в любом случае
 - [ ] WP context: done → `mv inbox/ → archive/wp-contexts/`
 - [ ] Lesson Hygiene: уроки MEMORY.md ≤8
 - [ ] Draft-list: Pack обогащён → черновик предложен?
 - [ ] Видео: обработанные помечены (если video.enabled)
 - [ ] Governance: REPOSITORY-REGISTRY, navigation.md, MAP.002
 - [ ] Backup: `day-close.sh` выполнен
-- [ ] **Rule-engine FP-stats** (WP-272 Ф2.5): `python3 ~/IWE/.claude/scripts/fp-stats.py --date $(date +%Y-%m-%d)` → если есть `⚠️ REVISE` (FP > 20%) — записать в «Завтра начать с» правило + FP%. Флоу ревизии: `~/IWE/PACK-agent-rules/revision-flow.md`.
+- [ ] **Rule-engine FP-stats** (WP-272 Ф2.5): `[ -f ~/IWE/.claude/scripts/fp-stats.py ] && python3 ~/IWE/.claude/scripts/fp-stats.py --date $(date +%Y-%m-%d) || echo "skip: fp-stats.py требует rule-classifier.py"` → если есть `⚠️ REVISE` → **спросить пилота по факту флага** (WP-545 Ф5, 21.08 — заменяет прежний еженедельный R8-вопрос, который спрашивал вслепую по расписанию, не по конкретному сигналу): «правило `<X>` — это ложные срабатывания детектора, или реальный, но неудобный сигнал?» Ответ → в «Завтра начать с» вместе с решением (переформулировать правило / оставить как есть)
 - [ ] Верификация compliance: /verify запускался сегодня?
-- [ ] WakaTime + Мультипликатор: часы / **бюджет ПО ФАКТУ** (sessions/00-index.md перечислен; ad-hoc peer-сессии оценены по числу ходов; сверхплановая работа в плановом РП — по факту); остаток недели. Sanity check: мультипликатор <1.5x при ≥10 peer-сессий = пересчитать
-- [ ] Итоги дня записаны в DayPlan **(postcondition 9a: grep подтверждён)**
-- [ ] Handoff-валидация: «Завтра начать с» содержит ВСЕ pending РП с конкретным next action
+- [ ] WakaTime + Мультипликатор: часы / бюджет ПО ФАКТУ (sessions/00-index.md перечислен; ad-hoc оценены по ходам; сверхплановое — по факту); sanity check ≥10 peer-сессий
+- [ ] Итоги дня записаны в DayPlan **(postcondition 9a: grep подтверждён)** — **N/A на strategy_day** (шаг 0в)
+- [ ] Handoff-валидация: «Завтра начать с» содержит ВСЕ pending РП с конкретным next action — **N/A на strategy_day** (шаг 0в; на strategy_day это поле живёт в WeekPlan, не DayPlan)
 - [ ] Сводка итогов записана в WeekReport (`<details>`, обратная хронология) **(postcondition 9b: grep подтверждён)**
 - [ ] Новое репо → MAPSTRATEGIC.md + Strategy.md
 
 Все ✅ → «День закрыт.» Иначе — указать что осталось.
+
+<!-- USER-SPACE -->
+<!-- /USER-SPACE -->

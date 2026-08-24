@@ -1,40 +1,62 @@
 #!/bin/bash
 # routing: helper  skill=day-close  called-by=haiku
 # see DP.SC.159, DP.ROLE.059
-# day-close.sh — Автоматические шаги Day Close (backup + reindex + linear sync)
+# day-close.sh — Автоматические шаги Day Close (backup + reindex + linear sync + sessions)
 #
 # Вызывается Claude из протокола Day Close (protocol-close.md § День, шаг 4).
-# Объединяет три механических операции в одну команду.
+# Объединяет четыре механических операции в одну команду.
 #
 # Использование:
-#   day-close.sh              # все три шага
-#   day-close.sh --backup     # только backup
-#   day-close.sh --reindex    # только reindex
-#   day-close.sh --linear     # только linear sync
+#   day-close.sh                # все четыре шага
+#   day-close.sh --backup       # только backup
+#   day-close.sh --reindex      # только reindex
+#   day-close.sh --linear       # только linear sync
+#   day-close.sh --sessions     # только консолидация сессий дня (DAP1-B, WP-7)
 #
 # Конфигурация: Пути заданы через переменные ниже — настроить при установке.
 
 set -euo pipefail
 
 # === КОНФИГУРАЦИЯ (настроить при установке) ===
-WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/IWE}"
+# Load unified environment: WORKSPACE_DIR, IWE_ROOT, IWE_SCRIPTS, etc.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../.claude/lib/iwe-env-bootstrap.sh" || exit 1
 GOVERNANCE_REPO="${GOVERNANCE_REPO:-${IWE_GOVERNANCE_REPO:-DS-strategy}}"
 DS_STRATEGY="$WORKSPACE_DIR/$GOVERNANCE_REPO"
-# Slug = $HOME с '/' → '-' (macOS: /Users/x → -Users-x; Linux/WSL: /home/x → -home-x).
-# Переопределить можно через env IWE_MEMORY_SRC (например, для нестандартного $HOME).
-HOME_SLUG=$(echo "$HOME" | tr '/' '-')
-MEMORY_SRC="${IWE_MEMORY_SRC:-$HOME/.claude/projects/${HOME_SLUG}-IWE/memory}"
+# Slug derived from WORKSPACE_DIR (not $HOME) so it matches Claude's project key
+# regardless of workspace location. Override via IWE_MEMORY_SRC if needed.
+WORKSPACE_SLUG=$(echo "$WORKSPACE_DIR" | tr '/_ ' '-')
+MEMORY_SRC="${IWE_MEMORY_SRC:-$HOME/.claude/projects/${WORKSPACE_SLUG}/memory}"
 EXOCORTEX_DST="$DS_STRATEGY/exocortex"
 # MCP reindex — опциональный компонент (WP-187 iwe-knowledge Gateway заменяет локальный knowledge-mcp).
 # Переопределить путь можно через env IWE_SELECTIVE_REINDEX.
+# do_reindex() exit code for "some branches indexed, some failed" (see do_reindex).
+readonly RC_REINDEX_PARTIAL=3
 SELECTIVE_REINDEX="${IWE_SELECTIVE_REINDEX:-$WORKSPACE_DIR/DS-MCP/knowledge-mcp/scripts/selective-reindex.sh}"
 SOURCES_JSON="${IWE_SOURCES_JSON:-$WORKSPACE_DIR/DS-MCP/knowledge-mcp/scripts/sources.json}"
 SOURCES_PERSONAL_JSON="${IWE_SOURCES_PERSONAL_JSON:-$WORKSPACE_DIR/DS-MCP/knowledge-mcp/scripts/sources-personal.json}"
+# issue #463: linear_sync_path и слияние day-rhythm-config.yaml ниже читаются через
+# python3+yaml с fallback на пустую строку — без pyyaml это не падает, а тихо
+# возвращает пустую строку, неотличимую от «поля нет в конфиге». Один явный
+# warning здесь вместо голого ModuleNotFoundError на каждом отдельном вызове.
+#
+# Evgenii Red Team review 2026-08-19 (defect #5 class): resolve python3+PyYAML
+# ONCE via the F6 shared resolver (scripts/lib/find-python3.sh, #453/#463),
+# reuse RESOLVED_PYTHON3 for every python3 call in this file below — a bare
+# `python3 -c "import yaml"` probe only sees PATH's own python3, which can
+# lack PyYAML on the same Apple Silicon machine where the resolver's own
+# Homebrew-path candidate (see find-python3.sh) does have it.
+RESOLVER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/find-python3.sh"
+RESOLVED_PYTHON3=""
+if ! RESOLVED_PYTHON3=$("$RESOLVER" 2>/dev/null); then
+  echo "⚠ pyyaml не найден — linear sync и merge day-rhythm-config.yaml тихо пропустятся. Установите: pip3 install --user pyyaml" >&2
+fi
 # Linear sync: путь читается из params.yaml (ключ linear_sync_path)
 PARAMS_YAML="$WORKSPACE_DIR/params.yaml"
 LINEAR_SYNC=""
-if [ -f "$PARAMS_YAML" ]; then
-  _raw=$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('linear_sync_path',''))" "$PARAMS_YAML" 2>/dev/null || echo "")
+if [ -n "$RESOLVED_PYTHON3" ] && [ -f "$PARAMS_YAML" ]; then
+  _raw=$("$RESOLVED_PYTHON3" -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('linear_sync_path',''))" "$PARAMS_YAML" 2>/dev/null || echo "")
   if [ -n "$_raw" ]; then
     LINEAR_SYNC="${_raw/#\~/$HOME}"
   fi
@@ -70,24 +92,104 @@ do_backup() {
   fi
 
   # Mirror *.md/*.yaml/*.yml from auto-memory; --delete prunes files removed upstream.
+  # exocortex/ is a multi-writer destination: extensions/, fault-profile, hindsight,
+  # and legacy decision logs are primary data written by other platform mechanisms.
+  # Root-anchored excludes are therefore ownership boundaries, not copy masks. Rsync
+  # protects excluded receiver paths from --delete unless --delete-excluded is used.
   # CLAUDE.md is excluded so the workspace copy below isn't deleted by --delete.
-  rsync -a --delete \
+  # -L (copy-links) dereferences symlinks so target content is copied, not the link —
+  # prevents a self-referencing ELOOP symlink from recurring here (WP-7 DOC8).
+  # day-rhythm-config.yaml is excluded here and handled separately via merge (see below)
+  # to preserve user-configured keys (e.g. calendar_ids) from being overwritten by template defaults.
+  # issue #343: --include='*/' must come first — without it the trailing --exclude='*'
+  # also excludes directories, so rsync never descends into memory/ subfolders and the
+  # backup silently misses e.g. memory/reference/agent-core.md while reporting success.
+  # -m goes with it: --include='*/' alone recreates the source's ENTIRE directory tree
+  # in the backup, including .git/ internals whose files the final --exclude drops —
+  # hundreds of empty dirs plus a fake exocortex/.git. -m prunes the empty ones.
+  rsync -aLm --delete \
     --exclude='CLAUDE.md' \
+    --exclude='day-rhythm-config.yaml' \
+    --exclude='/extensions/***' \
+    --exclude='/agent-fault-profile/***' \
+    --exclude='/hindsight/***' \
+    --exclude='/decisions/***' \
+    --exclude='/rules/***' \
+    --include='*/' \
     --include='*.md' --include='*.yaml' --include='*.yml' \
     --exclude='*' \
     "$MEMORY_SRC/" "$EXOCORTEX_DST/"
 
+  # #380: rules may carry an explicitly legal USER-SPACE block. Mirror them to
+  # a dedicated subtree so recovery never confuses platform rules with memory.
+  if [ -d "$WORKSPACE_DIR/.claude/rules" ]; then
+    mkdir -p "$EXOCORTEX_DST/rules"
+    rsync -a --delete "$WORKSPACE_DIR/.claude/rules/" "$EXOCORTEX_DST/rules/"
+  fi
+
+  # Merge day-rhythm-config.yaml: use auto-memory as base, preserve non-empty user values in dst.
+  # User-configurable keys protected: day_open.calendar_ids
+  local rhythm_src="$MEMORY_SRC/day-rhythm-config.yaml"
+  local rhythm_dst="$EXOCORTEX_DST/day-rhythm-config.yaml"
+  if [ -f "$rhythm_src" ]; then
+    if [ ! -f "$rhythm_dst" ]; then
+      cp "$rhythm_src" "$rhythm_dst"
+    elif [ -z "$RESOLVED_PYTHON3" ]; then
+      warn "  day-rhythm-config.yaml: пропущено слияние — pyyaml не найден (см. предупреждение выше)"
+    else
+      "$RESOLVED_PYTHON3" - "$rhythm_src" "$rhythm_dst" << 'PYEOF'
+import sys, yaml
+
+src_path, dst_path = sys.argv[1], sys.argv[2]
+with open(src_path) as f:
+    src_data = yaml.safe_load(f) or {}
+with open(dst_path) as f:
+    dst_data = yaml.safe_load(f) or {}
+
+merged = dict(src_data)
+
+# Preserve non-empty user values from dst (L4 config, user-editable keys)
+USER_KEYS = [("day_open", "calendar_ids")]
+for section, key in USER_KEYS:
+    dst_val = dst_data.get(section, {}).get(key)
+    if dst_val:  # preserve non-empty dst value over template default
+        merged.setdefault(section, {})[key] = dst_val
+
+with open(dst_path, "w") as f:
+    yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
+PYEOF
+    fi
+  fi
+
+  # issue #217: обратная подстановка $HOME -> {{HOME_DIR}} делает бэкап ОС-агностичным
+  # (симметрично прямой подстановке в setup.sh и restore-from-exocortex.sh).
   if [ -f "$WORKSPACE_DIR/CLAUDE.md" ]; then
-    cp "$WORKSPACE_DIR/CLAUDE.md" "$EXOCORTEX_DST/CLAUDE.md"
+    sed "s|$HOME|{{HOME_DIR}}|g" "$WORKSPACE_DIR/CLAUDE.md" > "$EXOCORTEX_DST/CLAUDE.md"
   fi
 
   if [ -f "$WORKSPACE_DIR/AGENTS.md" ]; then
-    cp "$WORKSPACE_DIR/AGENTS.md" "$EXOCORTEX_DST/AGENTS.md"
+    sed "s|$HOME|{{HOME_DIR}}|g" "$WORKSPACE_DIR/AGENTS.md" > "$EXOCORTEX_DST/AGENTS.md"
   fi
 
   local count
   count=$(find "$EXOCORTEX_DST" -maxdepth 1 -type f \( -name '*.md' -o -name '*.yaml' -o -name '*.yml' \) | wc -l | tr -d ' ')
   log "  Синхронизировано: $count файлов → $EXOCORTEX_DST/"
+}
+
+# iwe_repo_dirs — печатает поддиректории с .git, дедуплицированные по реальному
+# физическому пути (repo-symlink алиас иначе считается отдельным репозиторием
+# наравне с оригиналом — двойной reindex одного источника, найдено 2026-07-17).
+iwe_repo_dirs() {
+  local repo real seen=""
+  for repo in "$@"; do
+    [ -d "$repo/.git" ] || continue
+    real=$(cd -P "$repo" 2>/dev/null && pwd) || continue
+    case " $seen " in
+      *" $real "*) continue ;;
+    esac
+    seen="$seen $real"
+    echo "$repo"
+  done
 }
 
 # --- Шаг 2: Knowledge-MCP reindex ---
@@ -99,10 +201,15 @@ do_reindex() {
     return 0
   fi
 
+  if [ -z "$RESOLVED_PYTHON3" ]; then
+    warn "  reindex: пропущено — pyyaml не найден (см. предупреждение выше)"
+    return 0
+  fi
+
   # Маппинг dir→source+config из L2 (sources.json) и L4 (sources-personal.json)
   # Python резолвит path→git-root, чтобы связать dirname репо с source-именем.
   local dir_map
-  dir_map=$(python3 - "$SOURCES_JSON" "$SOURCES_PERSONAL_JSON" << 'PYEOF'
+  dir_map=$("$RESOLVED_PYTHON3" - "$SOURCES_JSON" "$SOURCES_PERSONAL_JSON" << 'PYEOF'
 import sys, json, os
 for config_path in sys.argv[1:]:
     if not os.path.exists(config_path):
@@ -119,8 +226,7 @@ PYEOF
 
   # Определяем, какие Pack/DS были изменены сегодня
   local l2_sources="" l4_sources=""
-  for repo in "$WORKSPACE_DIR"/PACK-* "$WORKSPACE_DIR"/DS-*; do
-    [ -d "$repo/.git" ] || continue
+  while IFS= read -r repo; do
     local repo_name
     repo_name=$(basename "$repo")
     local today_commits
@@ -141,25 +247,50 @@ PYEOF
         log "  ⚠ $repo_name: не в sources — пропуск"
       fi
     fi
-  done
+  done < <(iwe_repo_dirs "$WORKSPACE_DIR"/PACK-* "$WORKSPACE_DIR"/DS-*)
 
   if [ -z "$l2_sources" ] && [ -z "$l4_sources" ]; then
     log "  Нет изменений в индексируемых источниках — пропуск reindex"
     return 0
   fi
 
+  # Each call keeps its own exit code: under `set -e` a bare failing call would abort
+  # do_reindex() before the next step ever runs, and collapsing both into one status
+  # blocks the whole Day Close on a single failed branch (WP-7 02.08 — 31.07 and 01.08
+  # stalled on a failed L4 while L2 had already indexed 3078/2116 docs).
+  local l2_rc=0 l4_rc=0 ran=0 failed=0
+
   # Вызов 1: L2 источники (sources.json — дефолт selective-reindex)
   if [ -n "$l2_sources" ]; then
     log "  L2 источники:$l2_sources"
+    ran=$((ran + 1))
     # shellcheck disable=SC2086
-    "$SELECTIVE_REINDEX" $l2_sources
+    "$SELECTIVE_REINDEX" $l2_sources || l2_rc=$?
+    if [ "$l2_rc" -ne 0 ]; then
+      failed=$((failed + 1))
+      warn "  L2 reindex отказал (код $l2_rc)"
+    fi
   fi
 
   # Вызов 2: L4 источники (sources-personal.json через SOURCES_CONFIG)
   if [ -n "$l4_sources" ]; then
     log "  L4 источники:$l4_sources"
+    ran=$((ran + 1))
     # shellcheck disable=SC2086
-    SOURCES_CONFIG="$SOURCES_PERSONAL_JSON" "$SELECTIVE_REINDEX" $l4_sources
+    SOURCES_CONFIG="$SOURCES_PERSONAL_JSON" "$SELECTIVE_REINDEX" $l4_sources || l4_rc=$?
+    if [ "$l4_rc" -ne 0 ]; then
+      failed=$((failed + 1))
+      warn "  L4 reindex отказал (код $l4_rc)"
+    fi
+  fi
+
+  if [ "$failed" -eq 0 ]; then
+    return 0
+  elif [ "$failed" -lt "$ran" ]; then
+    warn "  reindex: отказала часть веток ($failed из $ran) — Day Close продолжается"
+    return "$RC_REINDEX_PARTIAL"
+  else
+    return 1
   fi
 }
 
@@ -175,12 +306,104 @@ do_linear() {
   "$LINEAR_SYNC"
 }
 
+# --- Шаг 4: Консолидация сессий дня (DAP1-B, WP-7) ---
+do_session_consolidation() {
+  log "Шаг 4/4: Консолидация сессий дня"
+
+  if [ -z "$RESOLVED_PYTHON3" ]; then
+    warn "  Консолидация сессий: пропущено — pyyaml не найден (см. предупреждение выше)"
+    return 0
+  fi
+
+  local today
+  today=$(date +%Y-%m-%d)
+  local month_dir
+  month_dir=$(date +%Y-%m)
+  local sessions_root="$DS_STRATEGY/sessions/$month_dir"
+  local output_file="$DS_STRATEGY/current/sessions-today.md"
+
+  if [ ! -d "$sessions_root" ]; then
+    warn "  Папка sessions/$month_dir не найдена — пропуск"
+    return 0
+  fi
+
+  # Сканируем meta.yaml для сессий сегодняшнего дня
+  local entries=()
+  while IFS= read -r meta; do
+    local session_dir
+    session_dir=$(dirname "$meta")
+    local session_id
+    session_id=$(basename "$session_dir")
+
+    # Читаем task_id и task_description из meta.yaml (python для YAML)
+    local task_id task_desc start_time
+    task_id=$("$RESOLVED_PYTHON3" -c "
+import sys, yaml
+with open('$meta') as f:
+    d = yaml.safe_load(f)
+print(d.get('task_id', '') or '')
+" 2>/dev/null || echo "")
+    task_desc=$("$RESOLVED_PYTHON3" -c "
+import sys, yaml
+with open('$meta') as f:
+    d = yaml.safe_load(f)
+desc = d.get('task_description', '') or ''
+print(desc[:80] + ('...' if len(desc) > 80 else ''))
+" 2>/dev/null || echo "")
+    start_time=$("$RESOLVED_PYTHON3" -c "
+import sys, yaml
+with open('$meta') as f:
+    d = yaml.safe_load(f)
+t = str(d.get('start_time', '') or '')
+print(t[11:16] if len(t) >= 16 else '')
+" 2>/dev/null || echo "")
+
+    # Только если task_id не пустой — WP-явная сессия
+    if [ -n "$task_id" ]; then
+      entries+=("| $start_time | $task_id | $task_desc |")
+    fi
+  done < <(find "$sessions_root" -maxdepth 2 -name "meta.yaml" 2>/dev/null \
+    | while IFS= read -r f; do
+        # Проверяем дату в meta.yaml
+        date_val=$("$RESOLVED_PYTHON3" -c "
+import yaml
+with open('$f') as fh:
+    d = yaml.safe_load(fh)
+print(str(d.get('date','') or ''))
+" 2>/dev/null || echo "")
+        if [ "$date_val" = "$today" ]; then
+          echo "$f"
+        fi
+      done | sort)
+
+  mkdir -p "$(dirname "$output_file")"
+
+  if [ ${#entries[@]} -eq 0 ]; then
+    log "  Нет WP-сессий за $today — sessions-today.md не записан"
+    return 0
+  fi
+
+  {
+    echo "<!-- sessions-today: $today — auto-generated by day-close.sh -->"
+    echo "## Сессии дня $today"
+    echo ""
+    echo "| Время | РП | Задача |"
+    echo "|-------|----|--------|"
+    for e in "${entries[@]}"; do
+      echo "$e"
+    done
+    echo ""
+  } > "$output_file"
+
+  log "  Записано ${#entries[@]} сессий → $(basename "$output_file")"
+}
+
 # --- Лог ---
 write_log() {
   local date_str
   date_str=$(date "+%Y-%m-%d %H:%M")
   mkdir -p "$(dirname "$LOG_FILE")"
-  echo "$date_str | day-close | backup=$1 reindex=$2 linear=$3" >> "$LOG_FILE"
+  echo "$date_str | day-close | backup=$1 reindex=$2 linear=$3 sessions=$4" >> "$LOG_FILE"
 }
 
 # --- Main ---
@@ -189,15 +412,17 @@ main() {
   local run_backup=false
   local run_reindex=false
   local run_linear=false
+  local run_sessions=false
 
   for arg in "$@"; do
     case "$arg" in
-      --backup)  run_backup=true; do_all=false ;;
-      --reindex) run_reindex=true; do_all=false ;;
-      --linear)  run_linear=true; do_all=false ;;
+      --backup)   run_backup=true; do_all=false ;;
+      --reindex)  run_reindex=true; do_all=false ;;
+      --linear)   run_linear=true; do_all=false ;;
+      --sessions) run_sessions=true; do_all=false ;;
       --help|-h)
-        echo "Использование: day-close.sh [--backup] [--reindex] [--linear]"
-        echo "  Без аргументов — все три шага"
+        echo "Использование: day-close.sh [--backup] [--reindex] [--linear] [--sessions]"
+        echo "  Без аргументов — все четыре шага"
         exit 0
         ;;
       *)
@@ -211,28 +436,39 @@ main() {
     run_backup=true
     run_reindex=true
     run_linear=true
+    run_sessions=true
   fi
 
   log "=== Day Close (автоматические шаги) ==="
 
-  local backup_status="skip" reindex_status="skip" linear_status="skip"
+  local backup_status="skip" reindex_status="skip" linear_status="skip" sessions_status="skip"
 
   if $run_backup; then
     if do_backup; then backup_status="ok"; else backup_status="fail"; fi
   fi
 
   if $run_reindex; then
-    if do_reindex; then reindex_status="ok"; else reindex_status="fail"; fi
+    local reindex_rc=0
+    do_reindex || reindex_rc=$?
+    case "$reindex_rc" in
+      0)                     reindex_status="ok" ;;
+      "$RC_REINDEX_PARTIAL") reindex_status="partial" ;;
+      *)                     reindex_status="fail" ;;
+    esac
   fi
 
   if $run_linear; then
     if do_linear; then linear_status="ok"; else linear_status="fail"; fi
   fi
 
-  write_log "$backup_status" "$reindex_status" "$linear_status"
+  if $run_sessions; then
+    if do_session_consolidation; then sessions_status="ok"; else sessions_status="fail"; fi
+  fi
+
+  write_log "$backup_status" "$reindex_status" "$linear_status" "$sessions_status"
 
   log "=== Готово ==="
-  log "  backup=$backup_status  reindex=$reindex_status  linear=$linear_status"
+  log "  backup=$backup_status  reindex=$reindex_status  linear=$linear_status  sessions=$sessions_status"
 }
 
 main "$@"

@@ -11,6 +11,11 @@ triggers:
 routing:
   executor: haiku
   deterministic: false
+agents: single
+interaction: multi-step
+gates_required: []
+gates_enforced: []
+gates_rationale: "операционный скилл; WP Gate применим только при создании нового РП, не для операционных вызовов"
 ---
 
 # Аудит инсталляции IWE
@@ -20,6 +25,10 @@ routing:
 > **Принцип:** детектор отчитывается, оператор делает (см. `scripts/iwe-drift.sh:7-11`). Auto-fix не входит в обещание.
 
 Аргументы: $ARGUMENTS
+
+## When to use
+
+Аудит пользовательской инсталляции IWE. Запускает scripts/iwe-audit.sh + MCP healthcheck + smoke-test ритуала через sentinel-механику (контракт dry-run-contract.md), передаёт отчёт subagent'у в роли VR.R.002 Аудитор (context isolation) → verdict ✅/⚠️/❌ по 6 компонентам (Inventory, L1 drift, DS-strategy, L3 customizations, MCP, ритуал). Используй после restore из бэкапа, после update.sh, или при еженедельной сверке.
 
 ## Обещание
 
@@ -72,6 +81,8 @@ bash "$AUDIT_SCRIPT" $([ "${ARGUMENTS:-}" = "--critical" ] && echo "--critical")
 Сформировать markdown-секцию `## 4. MCP healthcheck`:
 
 ```markdown
+## Algorithm
+
 ## 4. MCP healthcheck
 
 | Tool | Статус | Латентность | Примечание |
@@ -92,22 +103,25 @@ Coverage: N/4
 
 ### Алгоритм
 
-1. **Получить SESSION_ID:**
+1. **Создать sentinel** (единое имя для gate + capability владельца, issue #369):
    ```bash
-   SID="${CLAUDE_SESSION_ID:-$(uuidgen 2>/dev/null || date +%s%N)}"
+   DRY_SID="${CLAUDE_SESSION_ID:-noid}"
+   DRY_SAFE_SID=$(printf '%s' "$DRY_SID" | tr -cd 'A-Za-z0-9._-')
+   DRY_TOKEN=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+   DRY_OWNER="/tmp/iwe-dry-run-owner-${DRY_SAFE_SID:-noid}.token"
+   umask 077
+   printf '%s' "$DRY_TOKEN" > "$DRY_OWNER"
+   jq -nc --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sid "$DRY_SID" \
+     --arg token "$DRY_TOKEN" --arg owner "$DRY_OWNER" \
+     '{created_at:$created,session_id:$sid,initiator:"audit-installation",owner_token:$token,owner_file:$owner}' \
+     > /tmp/iwe-dry-run.flag
    ```
-2. **Создать sentinel:**
-   ```bash
-   # SID гарантирует сессионную изоляцию при параллельных аудитах.
-   # Хук использует glob *.flag — intentional asymmetry. См. dry-run-gate.sh:30.
-   echo "{\"created_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"session_id\":\"$SID\",\"initiator\":\"audit-installation\"}" > /tmp/iwe-dry-run-${SID}.flag
-   ```
-3. **Запустить subagent** через Agent tool (subagent_type=general-purpose, модель Sonnet) с промптом:
+2. **Запустить subagent** через Agent tool (subagent_type=general-purpose, модель Sonnet) с промптом:
 
    ```
    Запусти ритуал /run-protocol close day по обычной процедуре. Не изобретай — следуй SKILL.md как написано.
 
-   ВАЖНО: в текущем окружении активен sentinel /tmp/iwe-dry-run-${SID}.flag — это означает dry-run mode.
+   ВАЖНО: в текущем окружении активен sentinel /tmp/iwe-dry-run.flag — это означает dry-run mode.
    PreToolUse-хук dry-run-gate.sh заблокирует любой write-tool (Write/Edit/git-write/MCP-write).
    Это ожидаемо — твоя задача дойти максимально далеко, фиксируя на каком шаге упёрся.
 
@@ -119,12 +133,12 @@ Coverage: N/4
    - Заключение: ✅/⚠️/❌
    ```
 
-4. **Дождаться завершения subagent'а.**
-5. **Очистить sentinel:**
+3. **Дождаться завершения subagent'а.**
+4. **Очистить sentinel:**
    ```bash
-   rm -f /tmp/iwe-dry-run-${SID}.flag
+   rm -f /tmp/iwe-dry-run.flag
    ```
-6. **Сформировать секцию 6 отчёта:**
+5. **Сформировать секцию 6 отчёта:**
    ```markdown
    ## 6. Ритуал smoke-test (/run-protocol close day)
 
@@ -139,7 +153,7 @@ Coverage: N/4
 
 ### Защита от sticky-sentinel
 
-Если subagent упал/завис → попытаться удалить sentinel явно (всегда). TTL 10 мин в самом хуке защищает от случаев, когда даже это не отработало (kill -9, краш CLI).
+Если subagent упал/завис → попытаться удалить sentinel явно (всегда). Stop владельца удалит capability-файл; чужой Stop не затронет защиту. TTL 10 мин в самом хуке защищает от случаев, когда даже это не отработало (kill -9, краш CLI).
 
 ## Шаг 3. Сборка единого отчёта
 
@@ -230,3 +244,6 @@ Coverage: N/4
 - **DS-strategy diff** — работает только если существует `FMT-strategy-template/` (или `templates/strategy-skeleton/`). Если нет — секция пометится «N/A».
 - **MCP healthcheck** — зависит от текущих доступных tools. Если набор изменится, обновить шаг 2.
 - **Sentinel sticky-state** — защита: TTL 10 мин в хуке + Stop-cleanup. Edge case: если хук изменён и не читает sentinel → блокировки не будет (fail-open). Защита: периодический re-test `/audit-installation` ловит регрессию.
+
+<!-- USER-SPACE -->
+<!-- /USER-SPACE -->

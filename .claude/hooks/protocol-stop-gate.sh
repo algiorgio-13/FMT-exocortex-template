@@ -12,11 +12,6 @@
 set -uo pipefail
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
-# --- WP-265 Ф5.2: cleanup dry-run sentinel on session end ---
-if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
-    rm -f "/tmp/iwe-dry-run-${CLAUDE_SESSION_ID}.flag" 2>/dev/null || true
-fi
-
 # --- Infinite loop guard ---
 if [ "${STOP_HOOK_ACTIVE:-}" = "1" ]; then
   echo '{}'
@@ -30,8 +25,33 @@ if [ -z "$INPUT" ]; then
   exit 0
 fi
 
-TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+
+# #369 protected the shared sentinel from a NEIGHBOUR session's Stop (matched
+# by session_id + owner-token, confirmed still correct by issue #460 path 7).
+# It did not protect against the SAME session's own Stop: audit-installation
+# creates the sentinel, launches a subagent rehearsal, and the parent turn's
+# Stop can fire (session_id matches trivially) while that subagent is still
+# writing under it — issue #460 path 6. Fix: this hook no longer deletes the
+# shared sentinel at all, matched session or not. Removal is now only the
+# explicit `rm -f` at the end of the owning procedure, backed by the
+# fail-closed TTL in dry-run-gate.sh (path 3) as the crash fallback. The
+# owner-file is still cleared here, but only once it's confirmed residue
+# (sentinel already gone) — never while the sentinel it points at is live.
+cleanup_owned_dry_run_sentinel() {
+  local sid="$1" safe_sid owner_file
+  [ -n "$sid" ] || return 0
+  safe_sid=$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9._-')
+  [ -n "$safe_sid" ] || return 0
+  owner_file="/tmp/iwe-dry-run-owner-${safe_sid}.token"
+  [ -f "$owner_file" ] || return 0
+  [ -f /tmp/iwe-dry-run.flag ] && return 0
+  rm -f "$owner_file" 2>/dev/null || true
+}
+
+cleanup_owned_dry_run_sentinel "$SESSION_ID"
+
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 # Нет транскрипта — пропустить
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
@@ -39,7 +59,11 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
   exit 0
 fi
 
-IWE_ROOT="${IWE_ROOT:-$HOME/IWE}"
+# Load unified environment: WORKSPACE_DIR, IWE_ROOT, IWE_SCRIPTS, etc.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_DIR="$(cd "$HOOK_DIR/.." && pwd)"
+# shellcheck source=../lib/iwe-env-bootstrap.sh
+source "$CLAUDE_DIR/lib/iwe-env-bootstrap.sh" || exit 1
 GATE_LOG="$IWE_ROOT/.claude/logs/gate_log.jsonl"
 mkdir -p "$(dirname "$GATE_LOG")" 2>/dev/null || true
 

@@ -17,7 +17,14 @@
 
 set -eu
 
-IWE_ROOT="${IWE_ROOT:-$HOME/IWE}"
+# Load unified environment: WORKSPACE_DIR, IWE_ROOT, IWE_SCRIPTS, etc.
+# NOTE: iwe-env-bootstrap.sh reassigns SCRIPT_DIR to its OWN location (via its
+# BASH_SOURCE[0]) as a side effect of being sourced — save ours first so the
+# frontmatter.sh source below still resolves relative to THIS script (issue #229).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_MEMORY_VALIDATE_DIR="$SCRIPT_DIR"
+source "$SCRIPT_DIR/../.claude/lib/iwe-env-bootstrap.sh" || exit 1
+source "$_MEMORY_VALIDATE_DIR/../.claude/lib/frontmatter.sh" || exit 1
 MEMORY_DIR="$IWE_ROOT/memory"
 QUIET=0
 TARGET=""
@@ -42,12 +49,6 @@ while [ $# -gt 0 ]; do
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
-
-# Извлечь значение поля из frontmatter файла
-get_field() {
-    local file="$1" field="$2"
-    awk '/^---/{f++} f==1 && /^'"$field"':/{gsub(/^[^:]+: */,""); gsub(/^["'"'"']|["'"'"']$/,""); print; exit}' "$file"
-}
 
 # Проверить наличие frontmatter
 has_frontmatter() {
@@ -77,6 +78,22 @@ validate_file() {
             errors=$((errors + 1))
         fi
     done
+
+    # Проверка 2b (#513): каноническая форма — плоская. Вложенный metadata:
+    # (его пишет системная инструкция Claude Code, запретить нельзя) читается
+    # единым reader'ом; конфликт «один ключ в обеих формах с разными
+    # значениями» — ошибка, тихий приоритет запрещён.
+    if awk '/^---/{f++; next} f!=1{next} /^metadata:[ \t\r]*$/{found=1; exit} END{exit !found}' "$file"; then
+        for field in $REQUIRED_FIELDS; do
+            flat=$(awk '/^---/{f++; next} f!=1{next} /^'"$field"':/{gsub(/^[^:]+: */,""); gsub(/["'"'"']/,""); print; exit}' "$file")
+            nested=$(awk '/^---/{f++; next} f!=1{next} /^metadata:[ \t\r]*$/{m=1; next} m && /^[^ \t]/{m=0} m && /^[ \t]+'"$field"':/{gsub(/^[ \t]*[^:]+: */,""); gsub(/["'"'"']/,""); print; exit}' "$file")
+            if [ -n "$flat" ] && [ -n "$nested" ] && [ "$flat" != "$nested" ]; then
+                errs="$errs\n  ❌ конфликт форм: '$field' задан и плоско ('$flat'), и в metadata: ('$nested')"
+                errors=$((errors + 1))
+            fi
+        done
+        [ "${QUIET:-0}" -eq 0 ] && echo "  ℹ️  $file: вложенная форма metadata: (канонична плоская — spec §3); reader нормализует, перезапись сериализует плоско"
+    fi
 
     # Проверка 3: допустимые значения type
     type_val=$(get_field "$file" "type")

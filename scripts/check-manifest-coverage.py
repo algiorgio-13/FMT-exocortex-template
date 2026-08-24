@@ -6,6 +6,11 @@
 # Файлы без покрытия = в git, но не в manifest["files"] и не в exclusions.
 # Исправление: добавить в manifest["files"] или manifest["excluded_paths"].
 # excluded_paths принимает список строк: ["path/to/file.md", ...]
+#
+# issue #247: update.sh (step 6e) replaces update-manifest.json wholesale on
+# every update, so user edits to excluded_paths do not survive. Fork-local
+# exclusions belong in update-manifest.local.json (same directory, same
+# excluded_paths schema) — update.sh never touches it, this checker merges it.
 
 from __future__ import annotations
 
@@ -15,14 +20,16 @@ from pathlib import Path
 
 
 # Файлы/папки, намеренно не включаемые в manifest:
-# - .github/        — CI/CD, не доставляется пользователям
-# - setup/          — install-time скрипты
+# - .github/ и setup/ не исключаются целиком: пользовательские workflow и
+#   bootstrap-скрипты обязаны быть перечислены в манифесте. Исключения ниже
+#   перечисляют только maintainer/test-only поддеревья и файлы.
 # - seed/           — scaffold-шаблоны (только при первом install)
 # - templates/      — scaffold-шаблоны (только при первом install)
 # - extensions/     — пользовательские кастомизации, не перезаписываются
 # - params.yaml     — пользовательский конфиг (авторский)
 # - generate-manifest.sh / update-manifest.json — инструментарий манифеста
-# - README.md / LICENSE / CONTRIBUTING.md / CHANGELOG.md — мета репо (только корень)
+# - README.md / LICENSE / CONTRIBUTING.md / CHANGELOG.md / CODE_OF_CONDUCT.md /
+#   SECURITY.md / PRIVACY.md / CODEOWNERS / CITATION.cff — мета репо (только корень)
 # - .gitkeep        — маркеры пустых папок
 # - .DS_Store       — мусор macOS
 
@@ -35,6 +42,11 @@ _ROOT_ONLY_EXCLUDED_NAMES = frozenset({
     "CONTRIBUTING.md",
     "LICENSE",
     "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "PRIVACY.md",
+    "CODEOWNERS",
+    "CITATION.cff",
 })
 
 # Имена файлов, исключаемые везде независимо от папки.
@@ -42,19 +54,50 @@ _ALWAYS_EXCLUDED_NAMES = frozenset({
     ".DS_Store",
     ".gitkeep",
     "params.yaml",
+    # issue #348: рабочий params.yaml больше не трекается шаблоном, в репозитории
+    # лежит образец. Оба имени — пользовательское пространство, ни то ни другое
+    # не доставляется через манифест: рабочий файл засевает build-runtime.sh.
+    "params.yaml.example",
     "generate-manifest.sh",
     "update-manifest.json",
+    "update-manifest.local.json",
 })
 
 # Точные пути для исключения.
 _EXCLUDED_EXACT_PATHS = frozenset({
     ".claude/settings.local.json",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/workflows/aisystant-sync.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/stale.yml",
+    ".github/workflows/translate-sync.yml",
+    ".github/workflows/validate-template.yml",
+    ".github/workflows/weekly-release.yml",
+    "setup/detector-regex.sh",
+    "setup/integration-contract-validator.sh",
+    "setup/optional/COVER-IMAGES.md",
+    "setup/optional/README.md",
+    "setup/optional/generate-post-image.py",
+    "setup/optional/pomodoro-alert.plist",
+    "setup/optional/pomodoro-alert.py",
+    "setup/optional/setup-agent-workspace.sh",
+    "setup/optional/setup-calendar.sh",
+    "setup/release-audit-prompt.md",
+    "setup/smoke-test-fresh-install.sh",
+    "setup/test-detectors.sh",
+    "setup/test-update-edge-cases.sh",
+    "setup/test-update-issue-226.sh",
+    "setup/ux-walkthrough-prompt.md",
+})
+
+_EXCLUDED_PREFIXES = frozenset({
+    ".github/ISSUE_TEMPLATE/",
+    "setup/detector-fixtures/",
+    "setup/promote-fixtures/",
 })
 
 # Верхнеуровневые папки: весь контент исключается.
 _EXCLUDED_TOP_DIRS = frozenset({
-    ".github",
-    "setup",
     "seed",
     "templates",
     "extensions",
@@ -75,11 +118,19 @@ def _is_excluded(path: str, extra: list[str]) -> bool:
     if path in _EXCLUDED_EXACT_PATHS:
         return True
 
+    if any(path.startswith(prefix) for prefix in _EXCLUDED_PREFIXES):
+        return True
+
     if parts and parts[0] in _EXCLUDED_TOP_DIRS:
         return True
 
     if path in extra:
         return True
+
+    for exc in extra:
+        exc_norm = exc.rstrip("/")
+        if path.startswith(exc_norm + "/") or path == exc_norm:
+            return True
 
     return False
 
@@ -115,6 +166,21 @@ def main() -> None:
     deprecated_files = {entry["path"] for entry in manifest.get("deprecated_files", [])}
     extra_exclusions = _parse_excluded_paths(manifest.get("excluded_paths", []))
 
+    # Fork-local exclusions survive update.sh (which replaces the main manifest
+    # wholesale at step 6e). Malformed JSON is a loud error, not a silent skip:
+    # otherwise a typo would silently re-enable blocking on excluded files.
+    local_path = Path(manifest_path).parent / "update-manifest.local.json"
+    if local_path.is_file():
+        try:
+            with open(local_path, encoding="utf-8") as fh:
+                local_manifest = json.load(fh)
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: {local_path} is not valid JSON: {exc}", file=sys.stderr)
+            sys.exit(2)
+        extra_exclusions += _parse_excluded_paths(
+            local_manifest.get("excluded_paths", [])
+        )
+
     repo_files = [line.strip() for line in sys.stdin if line.strip()]
 
     if not repo_files:
@@ -144,7 +210,9 @@ def main() -> None:
         for g in sorted(gaps):
             print(f"  {g}", file=sys.stderr)
         print(
-            '  → Добавить в manifest["files"] или manifest["excluded_paths"]',
+            '  → Добавить в manifest["files"] или manifest["excluded_paths"];\n'
+            "    личные файлы форка — в update-manifest.local.json "
+            '("excluded_paths": [...]), его update.sh не перезаписывает',
             file=sys.stderr,
         )
         sys.exit(1)

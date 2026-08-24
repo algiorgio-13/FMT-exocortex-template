@@ -2,15 +2,28 @@ name: IWE Cloud Scheduler (базовый)
 
 # Облачный планировщик IWE — базовый уровень (без LLM).
 # Выполняет задачи, которые не требуют Claude API:
-# - Backup memory/ и CLAUDE.md в exocortex/
+# - Backup memory/ в exocortex/ (CLAUDE.md — НЕ здесь, см. #172: корневой CLAUDE.md бэкапит day-close.sh локально)
 # - Health check ночной автоматики
 #
 # Для пользователей шаблона FMT-exocortex-template.
 # Подробности: DP.SC.019 (PACK-digital-platform/08-service-clauses/)
 #
 # Настройка:
-# 1. Создайте GitHub Secret: STRATEGY_REPO_TOKEN (PAT с доступом к DS-strategy)
-# 2. Укажите STRATEGY_REPO в env ниже (ваш DS-strategy репо)
+# 1. Скопируйте этот файл в СВОЙ DS-strategy репозиторий (не форк FMT-exocortex-template — см. docs/CLOUD-SCHEDULER.md)
+# 2. Создайте GitHub Secret: STRATEGY_REPO_TOKEN (PAT с доступом к DS-strategy)
+# 3. Укажите STRATEGY_REPO в Settings → Variables вашего репозитория
+#
+# issue #454: раньше здесь стоял `if: github.repository == 'TserenTserenov/FMT-exocortex-template'`
+# на уровне job — идея была не гонять расписание по случайным форкам шаблона, но
+# условие проверяло ИМЯ АПСТРИМ-РЕПОЗИТОРИЯ, а не факт форка — и поэтому так же
+# ломало и единственный документированный сценарий (шаг 1 выше): в СВОЁМ отдельном
+# DS-strategy репозитории github.repository тоже никогда не равен
+# TserenTserenov/FMT-exocortex-template, так что workflow не запускался НИГДЕ,
+# кроме самого upstream-репозитория шаблона, где STRATEGY_REPO в принципе не
+# настроен. Ниже — не «дополнительная защита от форков», а восстановление
+# единственной проверки, которая и нужна: настроен ли STRATEGY_REPO. Не настроен
+# (обычный форк шаблона, который никто не подключал) → шаг "Skip" ниже печатает
+# причину, не тихо проваливается.
 
 on:
   schedule:
@@ -60,6 +73,18 @@ jobs:
           DATE=$(date +%Y-%m-%d)
           BACKUP_DIR="exocortex"
 
+          # WP-7 Ф-Backup-Resilience-Audit (27.07): если exocortex/ в .gitignore этого
+          # репозитория (пилот мог осознанно вынести память из git — личные данные,
+          # см. WP-500 Ф3), git add ниже молча ничего не сделает и джоба каждую ночь
+          # будет писать "No changes to backup", не объясняя причину. Явный skip вместо
+          # тихого no-op — офсайт-защита памяти в этом случае идёт другим каналом
+          # (например restic на собственном сервере), не этим GitHub Actions job.
+          if git check-ignore -q "$BACKUP_DIR" 2>/dev/null; then
+            echo "⚠️  $BACKUP_DIR/ в .gitignore этого репозитория — облачный бэкап памяти пропущен."
+            echo "    Офсайт-защита memory/ обеспечивается другим каналом (см. свою backup-policy)."
+            exit 0
+          fi
+
           mkdir -p "$BACKUP_DIR"
 
           # Копируем memory/ файлы если есть
@@ -71,11 +96,12 @@ jobs:
             echo "✓ Memory files backed up"
           fi
 
-          # Копируем CLAUDE.md из корня workspace если есть
-          if [ -f "CLAUDE.md" ]; then
-            cp "CLAUDE.md" "$BACKUP_DIR/CLAUDE.md"
-            echo "✓ CLAUDE.md backed up"
-          fi
+          # CLAUDE.md НЕ копируется из облака (#172). Слот exocortex/CLAUDE.md семантически =
+          # бэкап КОРНЕВОГО CLAUDE.md рабочей папки: restore-from-exocortex.sh разворачивает его
+          # в $WORKSPACE_DIR/CLAUDE.md. Облако клонирует только STRATEGY_REPO и физически не видит
+          # корневой CLAUDE.md (в слоёной топологии он не лежит ни в одном репо), а CLAUDE.md самого
+          # STRATEGY_REPO уже под git в этом же репо. Корневой бэкапит day-close.sh локально —
+          # это единственно возможное место. Не возвращать копирование сюда (затрёт локальный бэкап).
 
           # Проверяем, есть ли изменения
           if git diff --quiet -- "$BACKUP_DIR/"; then
@@ -94,6 +120,7 @@ jobs:
         run: |
           echo "⚠️ STRATEGY_REPO не настроен. Укажите в Settings → Variables → STRATEGY_REPO"
           echo "Формат: username/repo-name"
+          echo "Если вы видите это в форке FMT-exocortex-template: этот workflow не предназначен для запуска здесь — см. docs/CLOUD-SCHEDULER.md, шаг 1 (скопировать в свой DS-strategy репозиторий)."
 
   health-check:
     name: Health check (ночная автоматика)
@@ -271,3 +298,4 @@ jobs:
         if: env.STRATEGY_REPO == ''
         run: |
           echo "⚠️ STRATEGY_REPO не настроен. Укажите в Settings → Variables → STRATEGY_REPO"
+          echo "Если вы видите это в форке FMT-exocortex-template: этот workflow не предназначен для запуска здесь — см. docs/CLOUD-SCHEDULER.md, шаг 1 (скопировать в свой DS-strategy репозиторий)."

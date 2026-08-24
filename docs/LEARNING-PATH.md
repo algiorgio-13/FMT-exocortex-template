@@ -5,8 +5,7 @@
 > Каждый раздел: **зачем** → **что изучить** → **где найти**.
 > Не на macOS или не Claude Code? → **[PORTABILITY.md](PORTABILITY.md)**
 
-<details>
-<summary><b>Как пользоваться этим файлом</b></summary>
+## Как пользоваться этим файлом
 
 1. **Новичок:** Разделы 1-2 (что такое IWE, архитектура). Это ~1 час. Поймёшь, как всё устроено.
 2. **Первая неделя:** Разделы 3-5 (фундамент, репозитории, повседневная работа). По мере необходимости.
@@ -20,9 +19,7 @@
 >
 > Ссылки `./` — файлы в этом репо. Ссылки `github.com/...` — другие репозитории.
 
-</details>
-<details open>
-<summary><b>1. Что такое IWE</b></summary>
+## 1. Что такое IWE
 
 ### 1.1. Определение
 
@@ -172,9 +169,7 @@ TM1-TM3: Наставник    TA1-TA4: Администратор    TD1: Ра�
 
 **Центральный инвариант IWE:** Обновления платформы (Standard) **никогда** не затрагивают данные пользователя (Personal). Твои планы, знания и стратегия принадлежат тебе.
 
-</details>
-<details>
-<summary><b>2. Архитектура: контуры и пространства</b></summary>
+## 2. Архитектура: контуры и пространства
 
 ### 2.1. Четыре контура системы
 
@@ -376,9 +371,7 @@ PACK-{область}/             ← Твои доменные знания
 
 **Правило IntegrationGate:** Перед добавлением нового инструмента в свой IWE: (1) тип, (2) контур (L2/L3/L4), (3) роли, (4) продукты, (5) процессы.
 
-</details>
-<details>
-<summary><b>3. Фундамент мышления</b></summary>
+## 3. Фундамент мышления
 
 ### 3.1. Иерархия принципов
 
@@ -457,9 +450,7 @@ FPF (First Principles Framework) — «операционная система �
 - [FPF/README.md](https://github.com/ailev/FPF) — обзор
 - [memory/fpf-reference.md](../memory/fpf-reference.md) — навигация по ключевым секциям
 
-</details>
-<details>
-<summary><b>4. Репозитории и проекты</b></summary>
+## 4. Репозитории и проекты
 
 ### 4.1. Три типа репозиториев
 
@@ -554,9 +545,7 @@ DS — самый частый тип репозитория, который т�
 **Где изучить:**
 - [SPF/spec/SPF.SPEC.001-entity-coding.md](https://github.com/TserenTserenov/SPF/blob/main/spec/SPF.SPEC.001-entity-coding.md) — полная спецификация
 
-</details>
-<details>
-<summary><b>5. Повседневная работа</b></summary>
+## 5. Повседневная работа
 
 ### 5.1. ОРЗ-фрактал: День и Сессия
 
@@ -801,12 +790,12 @@ DS — самый частый тип репозитория, который т�
 
 #### Настройка дня стратегирования
 
-По умолчанию сессия стратегирования запускается в **понедельник** (`strategy_day: monday` в `memory/day-rhythm-config.yaml`). Ты можешь выбрать любой день недели:
+По умолчанию сессия стратегирования запускается в **воскресенье** (`strategy_day: sunday` в `memory/day-rhythm-config.yaml`). Ты можешь выбрать любой день недели:
 
 ```yaml
 # memory/day-rhythm-config.yaml
 day_open:
-  strategy_day: saturday   # monday..sunday — твой день стратегирования
+  strategy_day: saturday   # sunday..sunday — твой день стратегирования
 ```
 
 В этот день:
@@ -827,7 +816,7 @@ day_open:
 
 **Dormant Review:** `on-demand` старше 3 недель → автоматически в повестку стратегирования. Вопрос: «Архивировать (📦) или назначить конкретное условие?» Это предотвращает накопление «мёртвых» РП.
 
-Условия хранятся в колонке «Активация» в [WP-REGISTRY](../seed/strategy/docs/WP-REGISTRY.md).
+Условия хранятся в контекстном файле РП (`inbox/WP-NNN/WP-NNN.md`, поле `activation:` во frontmatter — например `activation: on-demand` или `activation: dep:WP-73`). WP-REGISTRY — только индекс (номер/приоритет/название/статус/репо/бюджет), детали конкретного РП, включая условие активации, живут в его контекстном файле (issue #263).
 
 **Где изучить:**
 - [roles/strategist/prompts/](../roles/strategist/prompts/) — 9 промптов для каждого сценария
@@ -910,9 +899,7 @@ Guards проверяются при каждом Note-Review и при созд
 | Протокол сортировки | `roles/strategist/prompts/note-review.md` (категория #4) |
 | Протокол Close | `memory/protocol-close.md` (шаг 9: draft-list) |
 
-</details>
-<details>
-<summary><b>6. Знания: Pack и экстракция</b></summary>
+## 6. Знания: Pack и экстракция
 
 ### 6.1. Что такое Pack
 
@@ -1018,14 +1005,14 @@ Hybrid search (vector + keyword) по всем Pack-репозиториям и 
 
 > Поиск по руководствам: `knowledge_search("запрос", source_type="guides")`. Отдельный guides-сервер не нужен — Gateway объединяет все источники.
 
-#### digital-twin — цифровой двойник ученика
+#### digital-twin — цифровой двойник участника
 
-Метамодель данных ученика: цели, самооценка, контекст, прогресс.
+Метамодель данных участника: цели, самооценка, контекст, прогресс.
 
 | Инструмент | Что делает | Пример |
 |------------|-----------|--------|
 | `dt_describe_by_path` | Структура метамодели | `dt_describe_by_path("/")` → 4 категории IND.1-4 |
-| `dt_read_digital_twin` | Чтение данных | `dt_read_digital_twin("1_declarative/1_2_goals")` → цели ученика |
+| `dt_read_digital_twin` | Чтение данных | `dt_read_digital_twin("1_declarative/1_2_goals")` → цели участника |
 | `dt_write_digital_twin` | Запись в IND.1 | `dt_write_digital_twin("1_declarative/...", data)` |
 
 > **IND.1 (Declarative)** — единственная записываемая категория. IND.2 (Collected), IND.3 (Derived), IND.4 (Generated) — только чтение.
@@ -1037,7 +1024,7 @@ Hybrid search (vector + keyword) по всем Pack-репозиториям и 
 | Доменный вопрос, паттерн, архитектура | `knowledge_search(query, source_type="pack")` |
 | Конкретный документ по коду (DP.ROLE.001) | `knowledge_get_document("filename")` |
 | Обучение, методология, руководства | `knowledge_search(query, source_type="guides")` |
-| Цели ученика, самооценка | `dt_read_digital_twin("path")` |
+| Цели участника, самооценка | `dt_read_digital_twin("path")` |
 | Перед записью в Pack — проверка дубликатов | `knowledge_search` + `knowledge_get_document` |
 
 ### 6.6. Онтология: граф знаний
@@ -1057,9 +1044,7 @@ Hybrid search (vector + keyword) по всем Pack-репозиториям и 
 - [SPF/ontology.md](https://github.com/TserenTserenov/SPF/blob/main/ontology.md) — SPF-level
 - [SPF/docs/conceptual-model.md](https://github.com/TserenTserenov/SPF/blob/main/docs/conceptual-model.md) — концептуальная карта
 
-</details>
-<details>
-<summary><b>7. Роли и ИИ-агенты</b></summary>
+## 7. Роли и ИИ-агенты
 
 ### 7.1. Ролецентричный подход (DP.D.033)
 
@@ -1137,9 +1122,7 @@ R8 Синхронизатор (диспетчер)
 
 **Подробности и схема role.yaml:** [roles/ROLE-CONTRACT.md](../roles/ROLE-CONTRACT.md)
 
-</details>
-<details>
-<summary><b>8. Качество и архитектура решений</b></summary>
+## 8. Качество и архитектура решений
 
 ### 8.1. ArchGate (ЭМОГССБ)
 
@@ -1268,9 +1251,7 @@ IWE использует LLM (Claude) — это создаёт специфич
 - [CLAUDE.md](../CLAUDE.md) § 5 — ЭМОГССБ (включая характеристику Безопасность)
 - [DP.ARCH.001 § 4.7](https://github.com/TserenTserenov/PACK-digital-platform/blob/main/pack/digital-platform/02-domain-entities/DP.ARCH.001-platform-architecture.md) — архитектурная характеристика Безопасность
 
-</details>
-<details>
-<summary><b>9. Платформа: бот и тиры</b></summary>
+## 9. Платформа: бот и тиры
 
 ### 9.1. 4-осевая модель тиров
 
@@ -1353,9 +1334,7 @@ Telegram-бот — основная точка входа для T1-T3. Для 
 - [CLAUDE.md](../CLAUDE.md) § 3 — различение и размещение
 - `DS-ecosystem-development/PROCESSES.md` — все сценарии (governance-репозиторий экосистемы, создаётся локально при развёртывании, не публикуется на GitHub)
 
-</details>
-<details>
-<summary><b>10. Рост и развитие</b></summary>
+## 10. Рост и развитие
 
 ### 10.1. Создание своего Pack
 
@@ -1434,9 +1413,7 @@ Telegram-бот — основная точка входа для T1-T3. Для 
 - **Не добавляй агентов** пока не справляешься без них (IntegrationGate, § 8.4)
 - **Клонируй SPF** только когда готов создать Pack (read-only reference)
 
-</details>
-<details open>
-<summary><b>11. Быстрый справочник</b></summary>
+## 11. Быстрый справочник
 
 > **Архитектура FAQ:** Практические вопросы («как сделать») — здесь. Доменные вопросы («что такое», «зачем») — [DP.IWE.002 §11](../../PACK-digital-platform/pack/digital-platform/02-domain-entities/DP.IWE.002-iwe-template-and-setup.md#11-частые-вопросы-faq) (source-of-truth для бота).
 
@@ -1487,7 +1464,7 @@ Telegram-бот — основная точка входа для T1-T3. Для 
 | Что умеет бот? | Марафон, Лента, Консультация, Заметки, /twin, /profile | [DP.IWE.002 §11](../../PACK-digital-platform/pack/digital-platform/02-domain-entities/DP.IWE.002-iwe-template-and-setup.md#бот-и-профиль) |
 | Какой у меня тир? | `/twin` или `/profile` в боте. T0-T4, определяется автоматически | [DP.IWE.002 §11](../../PACK-digital-platform/pack/digital-platform/02-domain-entities/DP.IWE.002-iwe-template-and-setup.md#бот-и-профиль) |
 | Как использовать заметки? | `.текст` в боте → накопление → Note-Review → маршрутизация | [DP.IWE.002 §11](../../PACK-digital-platform/pack/digital-platform/02-domain-entities/DP.IWE.002-iwe-template-and-setup.md#заметки) |
-| Как настроить IWE на Windows? | WSL + VS Code. Файлы в ~/IWE/ (WSL), не /mnt/c/ | § 11 «Windows + WSL» |
+| Как настроить IWE на Windows? | Git Bash (ставится с Git for Windows) + VS Code — WSL не обязателен, но остаётся вариантом | § 11 «Windows: Git Bash или WSL?» |
 
 ### Типичные проблемы и решения
 
@@ -1640,13 +1617,15 @@ cd ~/IWE && ./setup.sh   # создаёт symlinks, ставит пакеты, �
 
 **Где:** § 2.2 (от шаблона к workspace), § 5.2 (память)
 
-#### «Windows + WSL: пошаговая настройка»
+#### «Windows: Git Bash или WSL?»
 
 **Что происходит.** У тебя Windows. Claude Code установлен, но непонятно какой терминал использовать — Git Bash (MINGW64) или WSL.
 
-**Ответ: используй WSL-терминал внутри VS Code.** Git Bash не подходит — он не поддерживает полноценный Linux-стек, который нужен Claude Code и MCP-серверам.
+**Ответ (пересмотрено 23.07 — предыдущая версия завышала требования): Git Bash достаточно для установки и повседневной работы, WSL не обязателен.** IWE — bash-скрипты + Node.js; MCP-сервер, который реально приходит в `.mcp.json` шаблона (`iwe-knowledge`, HTTP на `mcp.aisystant.com`), — удалённый сервис, ему всё равно, из какого терминала на клиенте запущен Claude Code. В шаблоне нет ни одного локального/stdio MCP-сервера, для которого терминал имел бы значение. Единственная реальная зависимость от bash — хуки Claude Code (пре/пост-commit и т.п.), которые вызывают `.sh`-файлы через системный shell: работают, если `bash` (тот, что ставится вместе с Git for Windows) есть в системном `PATH`. Подробности → [SETUP-GUIDE.md § Windows](SETUP-GUIDE.md#00-windows-без-wsl).
 
-**Пошагово:**
+**Когда всё же взять WSL:** нужна автоматика без постоянно открытого окна (cron-подобное локальное расписание — на голом Windows такого штатно нет, WSL с настроенным `systemd` даёт полноценный `cron`/`launchd`-аналог) **или** ты предпочитаешь работать в полноценном Linux-окружении по другим причинам. Для расписания без локальной автоматики вообще есть более простой путь — облачный вариант через GitHub Actions (не завязан на ОС).
+
+**Если хочешь WSL:**
 1. Установи WSL: `wsl --install` в PowerShell (от администратора)
 2. Внутри WSL: `mkdir -p ~/IWE && cd ~/IWE` — все репозитории должны быть в файловой системе WSL, **не** на `/mnt/c/`
 3. VS Code: установи расширение «WSL» (ms-vscode-remote.remote-wsl)
@@ -1655,9 +1634,9 @@ cd ~/IWE && ./setup.sh   # создаёт symlinks, ставит пакеты, �
 6. Claude Code: `npm install -g @anthropic-ai/claude-code` внутри WSL
 7. `cd ~/IWE && claude` — готово
 
-**Почему не Git Bash?** MINGW64 эмулирует Linux-команды поверх Windows, но MCP-серверы, Node.js-скрипты и cron-задачи рассчитаны на полноценный Linux. В Git Bash они либо не работают, либо работают нестабильно.
+**Почему файлы в WSL, а не на Windows-диске (если выбрал WSL)?** Файловая система WSL (`~/`) в 5-10 раз быстрее, чем доступ к `/mnt/c/` (Windows-диск через WSL). Watch-скрипты, git-операции и MCP-индексация на `/mnt/c/` работают критически медленно.
 
-**Почему файлы в WSL, а не на Windows-диске?** Файловая система WSL (`~/`) в 5-10 раз быстрее, чем доступ к `/mnt/c/` (Windows-диск через WSL). Watch-скрипты, git-операции и MCP-индексация на `/mnt/c/` работают критически медленно.
+**Честная оговорка.** Ни один из двух путей не проверялся живьём на Windows этой командой (CI-матрица шаблона гоняет только `ubuntu-latest`/`macos-latest`, Windows-раннера нет). Если наткнулся на конкретную поломку именно в Git Bash (не общее «что-то не так», а воспроизводимый симптом) — заведи issue в FMT-exocortex-template, это ценнее, чем гадать заранее.
 
 #### «Не понимаю, что записывать в заметки»
 
@@ -1724,7 +1703,5 @@ cd ~/IWE && ./setup.sh   # создаёт symlinks, ставит пакеты, �
 - Онтология → § 6.6
 - Платформа и бот → § 9
 - Рост → § 10
-
-</details>
 
 *Последнее обновление: 2026-03-15 (v2: ОРЗ-фрактал, классы верификации, обновлены все секции)*

@@ -49,7 +49,61 @@ fi
 
 # Skip on non-macOS or headless CI without launchctl
 if ! command -v launchctl >/dev/null 2>&1; then
-    echo "  ⊠ launchctl not available (non-macOS), skipping $ROLE_NAME install"
+    if [[ "$(uname -s)" == "Linux" ]]; then
+        if [ -n "${SETUP_CI:-}" ]; then
+            echo "  ⊠ SETUP_CI: systemd activation skipped for $ROLE_NAME"
+            exit 0
+        fi
+
+        source "$(cd "$SCRIPT_DIR/../lib" && pwd)/scheduler-cron.sh"
+
+        if [ -n "${IWE_RUNTIME:-}" ] && [ -d "$IWE_RUNTIME/roles/$ROLE_NAME/scripts/systemd" ]; then
+            SYSTEMD_SRC="$IWE_RUNTIME/roles/$ROLE_NAME/scripts/systemd"
+        elif [ -n "${IWE_WORKSPACE:-}" ] && [ -d "$IWE_WORKSPACE/.iwe-runtime/roles/$ROLE_NAME/scripts/systemd" ]; then
+            SYSTEMD_SRC="$IWE_WORKSPACE/.iwe-runtime/roles/$ROLE_NAME/scripts/systemd"
+        else
+            echo "ERROR: systemd units not found. Run setup.sh first." >&2
+            exit 1
+        fi
+
+        if grep -qrE '\{\{[A-Z_]+\}\}' "$SYSTEMD_SRC" 2>/dev/null; then
+            echo "ERROR: systemd units contain unsubstituted placeholders" >&2
+            exit 2
+        fi
+
+        mkdir -p "$HOME/logs/extractor"
+
+        # issue #454: same functional bus probe as synchronizer/strategist
+        # install.sh. iwe-extractor-inbox-check.timer is interval-based
+        # (OnUnitActiveSec=3h, no OnCalendar), so there's nothing to parse —
+        # "every 3 hours starting at :00" is the direct cron equivalent.
+        if ! iwe_systemd_user_bus_ok; then
+            echo "  ⚠ systemd --user недоступен (нет пользовательской сессионной шины — типично для WSL2/контейнера/сервера без активного логина)"
+            echo "  Installing $ROLE_NAME via cron fallback (issue #454)..."
+            iwe_install_cron_fallback "extractor" \
+                "0 */3 * * * $(iwe_cron_env_prefix) $SCRIPT_TARGET inbox-check >> $HOME/logs/extractor/cron-inbox-check.log 2>&1"
+            echo "  ✓ Installed via crontab. Verify: crontab -l | grep extractor.sh"
+            echo "  ✓ Logs: ~/logs/extractor/"
+            exit 0
+        fi
+
+        echo "Installing $ROLE_NAME systemd user service (Linux)..."
+        SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+        mkdir -p "$SYSTEMD_USER_DIR"
+
+        cp "$SYSTEMD_SRC"/*.service "$SYSTEMD_SRC"/*.timer "$SYSTEMD_USER_DIR/"
+        systemctl --user daemon-reload
+        systemctl --user enable --now iwe-extractor-inbox-check.timer
+
+        echo "  ✓ Installed: iwe-extractor-inbox-check.timer"
+        echo "  ✓ Interval: every 3 hours"
+        echo "  ✓ Logs: ~/logs/extractor/"
+        echo ""
+        echo "Verify: systemctl --user status iwe-extractor-inbox-check.timer"
+        echo "Uninstall: systemctl --user disable --now iwe-extractor-inbox-check.timer && rm $SYSTEMD_USER_DIR/iwe-extractor-inbox-check.{service,timer}"
+        exit 0
+    fi
+    echo "  ⊠ launchctl not available (non-macOS/Linux), skipping $ROLE_NAME install"
     exit 0
 fi
 
@@ -62,7 +116,11 @@ launchctl unload "$PLIST_DST" 2>/dev/null || true
 cp "$PLIST_SRC" "$PLIST_DST"
 
 # Загружаем агент
-launchctl load "$PLIST_DST"
+if [ -z "${SETUP_CI:-}" ]; then
+    launchctl load "$PLIST_DST"
+else
+    echo "  ⊠ SETUP_CI: plist copied, launchctl activation skipped"
+fi
 
 echo "  ✓ Installed: com.extractor.inbox-check"
 echo "  ✓ Interval: every 3 hours"

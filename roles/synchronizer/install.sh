@@ -49,7 +49,79 @@ fi
 
 # Skip on non-macOS or headless CI without launchctl
 if ! command -v launchctl >/dev/null 2>&1; then
-    echo "  ⊠ launchctl not available (non-macOS), skipping $ROLE_NAME install"
+    if [[ "$(uname -s)" == "Linux" ]]; then
+        if [ -n "${SETUP_CI:-}" ]; then
+            echo "  ⊠ SETUP_CI: systemd activation skipped for $ROLE_NAME"
+            exit 0
+        fi
+
+        source "$(cd "$SCRIPT_DIR/../lib" && pwd)/scheduler-cron.sh"
+
+        if [ -n "${IWE_RUNTIME:-}" ] && [ -d "$IWE_RUNTIME/roles/$ROLE_NAME/scripts/systemd" ]; then
+            SYSTEMD_SRC="$IWE_RUNTIME/roles/$ROLE_NAME/scripts/systemd"
+        elif [ -n "${IWE_WORKSPACE:-}" ] && [ -d "$IWE_WORKSPACE/.iwe-runtime/roles/$ROLE_NAME/scripts/systemd" ]; then
+            SYSTEMD_SRC="$IWE_WORKSPACE/.iwe-runtime/roles/$ROLE_NAME/scripts/systemd"
+        else
+            echo "ERROR: systemd units not found. Run setup.sh first." >&2
+            exit 1
+        fi
+
+        if grep -qrE '\{\{[A-Z_]+\}\}' "$SYSTEMD_SRC" 2>/dev/null; then
+            echo "ERROR: systemd units contain unsubstituted placeholders" >&2
+            exit 2
+        fi
+
+        mkdir -p "$HOME/.local/state/exocortex"
+        mkdir -p "$HOME/logs/synchronizer"
+
+        # issue #454: `command -v systemctl` only proves the binary exists — on
+        # WSL2 without systemd, most containers, and some headless servers the
+        # session bus itself is gone ("Failed to connect to bus"), and
+        # `enable --now` below would just fail with no working scheduler left.
+        # Same functional probe as iwe_scheduler_state() (scripts/lib/common.sh)
+        # so install-time and runtime-detection never disagree.
+        if ! iwe_systemd_user_bus_ok; then
+            echo "  ⚠ systemd --user недоступен (нет пользовательской сессионной шины — типично для WSL2/контейнера/сервера без активного логина)"
+            echo "  Installing $ROLE_NAME via cron fallback (issue #454)..."
+            # WP-529 Ф9 (Evgenii 20.08): mapfile is bash4-only — this branch is
+            # exactly the one macOS (stock /bin/bash 3.2, no systemd) takes,
+            # so the previous line silently crashed the cron-fallback install
+            # on the platform it exists to serve.
+            cron_lines=()
+            while IFS= read -r cron_line; do
+                cron_lines+=("$cron_line")
+            done < <(iwe_timer_to_cron_lines "$SYSTEMD_SRC/iwe-exocortex-scheduler.timer" \
+                "$(iwe_cron_env_prefix) $SCRIPTS_DIR_RUNTIME/scheduler.sh dispatch >> $HOME/logs/synchronizer/cron-scheduler.log 2>&1")
+            iwe_install_cron_fallback "synchronizer" "${cron_lines[@]}"
+            echo "  ✓ Installed via crontab. Verify: crontab -l | grep scheduler.sh"
+            echo "  ✓ Logs: ~/logs/synchronizer/cron-scheduler.log"
+            exit 0
+        fi
+
+        echo "Installing $ROLE_NAME systemd user service (Linux)..."
+        SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+        mkdir -p "$SYSTEMD_USER_DIR"
+
+        cp "$SYSTEMD_SRC"/*.service "$SYSTEMD_SRC"/*.timer "$SYSTEMD_USER_DIR/"
+        systemctl --user daemon-reload
+        systemctl --user enable --now iwe-exocortex-scheduler.timer
+
+        echo "  ✓ Installed: iwe-exocortex-scheduler.timer"
+        echo "  ✓ Schedule: 10 dispatch points per day"
+        echo "  ✓ State: ~/.local/state/exocortex/"
+        echo "  ✓ Logs: ~/logs/synchronizer/"
+        echo ""
+        echo "Verify: systemctl --user list-timers | grep exocortex"
+        echo "Status: bash $SCRIPTS_DIR_RUNTIME/scheduler.sh status"
+        echo ""
+        echo "Auto-wake (recommended): sudo rtcwake -m no -t \$(date -d 'tomorrow 03:55' +%s)"
+        echo ""
+        echo "Telegram (optional): create ~/.config/aist/env with:"
+        echo "  export TELEGRAM_BOT_TOKEN=\"your-token\""
+        echo "  export TELEGRAM_CHAT_ID=\"your-id\""
+        exit 0
+    fi
+    echo "  ⊠ launchctl not available (non-macOS/Linux), skipping $ROLE_NAME install"
     exit 0
 fi
 
@@ -67,7 +139,11 @@ mkdir -p "$HOME/logs/synchronizer"
 
 # Копируем и загружаем
 cp "$PLIST_SRC" "$PLIST_DST"
-launchctl load "$PLIST_DST"
+if [ -z "${SETUP_CI:-}" ]; then
+    launchctl load "$PLIST_DST"
+else
+    echo "  ⊠ SETUP_CI: plist copied, launchctl activation skipped"
+fi
 
 echo "  ✓ Installed: com.exocortex.scheduler"
 echo "  ✓ Schedule: 10 dispatch points per day"

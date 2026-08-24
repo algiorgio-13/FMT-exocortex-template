@@ -43,7 +43,26 @@ else
     NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     AGENT_ID="${CLAUDE_AGENT_ID:-claude-opus-4-7}"
     TASK_ID="${CLAUDE_TASK_ID:-}"
-    WP_ID=$(echo "$CWD" | grep -oE "WP-[0-9]+" | head -1 || echo "")
+    # Улучшенный WP detection — пробуем несколько источников (WP-295 fix)
+    WP_ID=""
+    # 1. Из CLAUDE_TASK_ID (может содержать WP-xxx)
+    if [ -n "${CLAUDE_TASK_ID:-}" ]; then
+        WP_ID=$(echo "$CLAUDE_TASK_ID" | grep -oE "WP-[0-9]+" | head -1 || echo "")
+    fi
+    # 2. Из текущей директории
+    if [ -z "$WP_ID" ] && [ -n "$CWD" ]; then
+        WP_ID=$(echo "$CWD" | grep -oE "WP-[0-9]+" | head -1 || echo "")
+    fi
+    # 3. Из git branch (если CWD — git repo)
+    if [ -z "$WP_ID" ] && [ -n "$CWD" ] && [ -d "$CWD/.git" ]; then
+        BRANCH=$(cd "$CWD" && git branch --show-current 2>/dev/null || echo "")
+        WP_ID=$(echo "$BRANCH" | grep -oE "WP-[0-9]+" | head -1 || echo "")
+    fi
+    # 4. Из последних коммитов (heuristic: часто коммит начинается с WP-xxx)
+    if [ -z "$WP_ID" ] && [ -n "$CWD" ] && [ -d "$CWD/.git" ]; then
+        RECENT_COMMIT=$(cd "$CWD" && git log -1 --pretty=%s 2>/dev/null || echo "")
+        WP_ID=$(echo "$RECENT_COMMIT" | grep -oE "WP-[0-9]+" | head -1 || echo "")
+    fi
     CTX_SUMMARY=""
     [ -n "$TASK_ID" ] && CTX_SUMMARY="task:${TASK_ID}"
 
@@ -71,22 +90,20 @@ case "$HOOK_EVENT" in
             Bash|WebFetch|WebSearch|mcp__*)
                 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
                 TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // {}' 2>/dev/null || echo "{}")
-                TOOL_RESPONSE=$(echo "$INPUT" | jq -c '.tool_response // {}' 2>/dev/null || echo "{}")
-                # input_hash = sha256(canonicalized tool_input)
+                # WP-500 Ф1: не сохраняем response-body в трейсах.
+                # Оставляем только input_hash и response_size_bytes для replay-кэша и метрик.
+                RAW_TOOL_RESPONSE=$(echo "$INPUT" | jq -c '.tool_response // {}' 2>/dev/null || echo "{}")
+                RESPONSE_SIZE=$(echo -n "$RAW_TOOL_RESPONSE" | wc -c | tr -d ' ')
                 INPUT_HASH="sha256:$(echo -n "$TOOL_INPUT" | shasum -a 256 | cut -d' ' -f1)"
-                RESPONSE_SIZE=$(echo -n "$TOOL_RESPONSE" | wc -c | tr -d ' ')
 
                 jq -nc \
                     --arg sid "$SESSION_UUID" --arg tn "$TOOL_NAME" --arg ih "$INPUT_HASH" \
-                    --argjson tin "$TOOL_INPUT" --argjson tres "$TOOL_RESPONSE" \
                     --argjson rsz "$RESPONSE_SIZE" --arg ts "$NOW" \
                     '{event_type: "agent_tool_called", schema_version: "v1", emitted_at: $ts, payload: {
                         session_id: $sid,
                         decision_id: null,
                         tool_name: $tn,
                         input_hash: $ih,
-                        input_payload: $tin,
-                        response: $tres,
                         response_size_bytes: $rsz,
                         called_at: $ts
                     }}' >> "$NDJSON" 2>/dev/null || true

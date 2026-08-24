@@ -30,7 +30,9 @@
 
 set -eu
 
-IWE_ROOT="${IWE_ROOT:-$HOME/IWE}"
+# Load unified environment: WORKSPACE_DIR, IWE_ROOT, IWE_SCRIPTS, etc.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../.claude/lib/iwe-env-bootstrap.sh" || exit 1
 DRIFT_CRITICAL=""
 
 while [ $# -gt 0 ]; do
@@ -273,6 +275,25 @@ else
     fi
 
     echo ""
+    echo "### Git hooks (core.hooksPath)"
+    echo ""
+    # WP-484 Ф9 (2026-07-23/24): core.hooksPath drifting from .githooks/ once
+    # silently disabled the pre-push force-push guard (WP-436) on a live host —
+    # the "guard exists but isn't wired up" gap stayed invisible until an incident.
+    HOOKS_PATH=$(git -C "$DS_DIR" config --get core.hooksPath 2>/dev/null || echo "")
+    if [ "$HOOKS_PATH" != ".githooks" ]; then
+        if [ -x "$DS_DIR/scripts/install-hooks.sh" ]; then
+            echo "⚠️ \`core.hooksPath\` = \`${HOOKS_PATH:-<не задан>}\`, ожидается \`.githooks\` — pre-push force-push guard (WP-436) может быть отключён. Почини: \`bash \"$DS_DIR/scripts/install-hooks.sh\"\`."
+        else
+            echo "⚠️ \`core.hooksPath\` = \`${HOOKS_PATH:-<не задан>}\`, ожидается \`.githooks\` — pre-push force-push guard (WP-436) может быть отключён. Почини: \`git -C \"$DS_DIR\" config core.hooksPath .githooks\`."
+        fi
+    elif [ ! -x "$DS_DIR/.githooks/pre-push" ]; then
+        echo "⚠️ \`core.hooksPath\` верный, но \`.githooks/pre-push\` отсутствует или не исполняемый."
+    else
+        echo "✅ \`core.hooksPath=.githooks\`, \`pre-push\` guard подключён"
+    fi
+
+    echo ""
     echo "### Diff с FMT-strategy-template"
     echo ""
 
@@ -311,10 +332,51 @@ fi
 
 echo ""
 
+# ---------- Раздел 3b: Promoted-copy drift (issue #347) ----------
+#
+# CI's check-seed-drift.sh holds scripts/ ↔ seed/strategy/scripts/ INSIDE the
+# template, but the installed governance copy (created once by setup.sh from
+# seed/strategy/) lives on the user machine where CI cannot see it. The audit
+# runs exactly where both sides physically exist — compare them here.
+# All three files must be checked, absence included: a missing lib/common.sh
+# breaks the scaffold just as silently as a stale one.
+
+echo "## 3b. Промотированные копии Day Open (seed шаблона ↔ установленный governance)"
+echo ""
+SEED_SCRIPTS="$IWE_ROOT/FMT-exocortex-template/seed/strategy/scripts"
+if [ ! -d "$SEED_SCRIPTS" ]; then
+    echo "_N/A — шаблон с seed/strategy/scripts/ не найден._"
+elif [ -z "${DS_DIR:-}" ] || [ ! -d "$DS_DIR/scripts" ]; then
+    echo "_N/A — governance-репо без scripts/ (конвейер Day Open не разворачивался)._"
+else
+    PROMOTED_DRIFT=0
+    for rel in day-open-scaffold.sh day-open-pipeline.sh lib/common.sh; do
+        seed_f="$SEED_SCRIPTS/$rel"
+        inst_f="$DS_DIR/scripts/$rel"
+        if [ ! -f "$seed_f" ]; then
+            echo "- ⚠️ \`seed/strategy/scripts/$rel\` отсутствует в шаблоне — регрессия доставки seed"
+            PROMOTED_DRIFT=$((PROMOTED_DRIFT + 1))
+        elif [ ! -f "$inst_f" ]; then
+            echo "- ⚠️ \`scripts/$rel\` не установлен в governance-репо — конвейер Day Open неполный"
+            PROMOTED_DRIFT=$((PROMOTED_DRIFT + 1))
+        elif ! cmp -s "$seed_f" "$inst_f"; then
+            echo "- ⚠️ \`scripts/$rel\` разошёлся с seed шаблона — обновить: \`cp \"$seed_f\" \"$inst_f\"\` (свои правки в копии сначала сохранить)"
+            PROMOTED_DRIFT=$((PROMOTED_DRIFT + 1))
+        else
+            echo "- ✅ \`scripts/$rel\` совпадает с seed"
+        fi
+    done
+    if [ "$PROMOTED_DRIFT" -gt 0 ]; then
+        OPTIONAL_MISSING=$((OPTIONAL_MISSING + PROMOTED_DRIFT))
+    fi
+fi
+
+echo ""
+
 # ---------- Раздел 4: User customizations (L3) ----------
 #
 # L3 живёт в 3-х местах: extensions/, params.yaml (отличия от skeleton),
-# AUTHOR-ONLY зоны в .claude/rules/distinctions.md.
+# AUTHOR-ONLY зоны в extensions/*.md.
 # Цель — показать, что после restore личные кастомизации на месте.
 # Это **информационная** секция: отсутствие L3 ≠ failure (новый пилот ещё
 # ничего не настроил). Verdict выносит Аудитор содержательно.
@@ -330,7 +392,7 @@ if [ ! -d "$EXT_DIR" ]; then
     echo "_extensions/ директория отсутствует — расширения не настроены_"
 else
     set +e
-    EXT_FILES=$(find "$EXT_DIR" -maxdepth 1 -type f -name "*.md" ! -name "README.md" 2>/dev/null | sort)
+    EXT_FILES=$(find -L "$EXT_DIR" -maxdepth 1 -type f -name "*.md" ! -name "README.md" 2>/dev/null | sort)
     set -e
     if [ -z "$EXT_FILES" ]; then
         echo "_В extensions/ только README — пользовательских хуков нет_"
@@ -338,12 +400,20 @@ else
         EXT_COUNT=$(printf '%s\n' "$EXT_FILES" | wc -l | tr -d ' ')
         echo "**Найдено хуков:** $EXT_COUNT"
         echo ""
-        echo "| Hook | Размер |"
-        echo "|---|---|"
+        echo "| Hook | Размер | Источник |"
+        echo "|---|---|---|"
         printf '%s\n' "$EXT_FILES" | while read -r ext_file; do
             ext_name=$(basename "$ext_file")
             ext_size=$(wc -l < "$ext_file" | tr -d ' ')
-            printf "| \`%s\` | %s строк |\n" "$ext_name" "$ext_size"
+            # issue #341 п.1: расширения часто держат в governance-репо и линкуют
+            # сюда — молча показывать их как обычный файл скрывает, где на самом
+            # деле живёт кастомизация (важно при разборе после restore/update).
+            if [ -L "$ext_file" ]; then
+                ext_target=$(readlink "$ext_file")
+                printf "| \`%s\` | %s строк | симлинк → \`%s\` |\n" "$ext_name" "$ext_size" "$ext_target"
+            else
+                printf "| \`%s\` | %s строк | файл |\n" "$ext_name" "$ext_size"
+            fi
         done
     fi
 fi
@@ -353,11 +423,15 @@ echo ""
 echo "### params.yaml — отличия от шаблона"
 echo ""
 PARAMS_USER="$IWE_ROOT/params.yaml"
-PARAMS_TEMPLATE="$IWE_ROOT/FMT-exocortex-template/params.yaml"
+# issue #348: эталон переехал в params.yaml.example — рабочий params.yaml внутри
+# шаблона больше не трекается. Старое имя остаётся запасным вариантом: на установке,
+# обновлённой не полностью, рядом может лежать прежний файл.
+PARAMS_TEMPLATE="$IWE_ROOT/FMT-exocortex-template/params.yaml.example"
+[ -f "$PARAMS_TEMPLATE" ] || PARAMS_TEMPLATE="$IWE_ROOT/FMT-exocortex-template/params.yaml"
 if [ ! -f "$PARAMS_USER" ]; then
     echo "_params.yaml не найден — конфигурация не инициализирована_"
 elif [ ! -f "$PARAMS_TEMPLATE" ]; then
-    echo "_FMT-exocortex-template/params.yaml не найден — сравнение невозможно_"
+    echo "_FMT-exocortex-template/params.yaml.example не найден — сравнение невозможно_"
 else
     set +e
     # Игнорируем комментарии и пустые строки при сравнении
@@ -377,28 +451,56 @@ else
 fi
 echo ""
 
-# 4c. AUTHOR-ONLY зоны в distinctions.md
-echo "### AUTHOR-ONLY зоны"
+# 4c. AUTHOR-ONLY zones in extensions/
+echo "### AUTHOR-ONLY зоны (extensions/)"
 echo ""
-DIST_FILE="$IWE_ROOT/.claude/rules/distinctions.md"
-if [ ! -f "$DIST_FILE" ]; then
-    echo "_distinctions.md не найден_"
+EXTENSIONS_DIR="$IWE_ROOT/extensions"
+if [ ! -d "$EXTENSIONS_DIR" ]; then
+    echo "_extensions/ не найдена (нормально для нового пилота)_"
 else
-    # Считаем строки внутри блоков <!-- AUTHOR-ONLY --> ... <!-- /AUTHOR-ONLY -->
-    # ИЛИ под заголовком "## Различения (авторские" (текущая авторская конвенция)
-    # grep -c возвращает rc=1 при 0 матчей, что в связке с || echo даёт "0\n0"
     set +e
-    AUTHOR_HEADER=$(grep -c "^## Различения (авторские" "$DIST_FILE" 2>/dev/null)
-    AUTHOR_BLOCKS=$(grep -c "<!-- AUTHOR-ONLY" "$DIST_FILE" 2>/dev/null)
+    AUTHOR_FILES=$(find "$EXTENSIONS_DIR" -name "*.md" -print0 2>/dev/null | xargs -0 grep -l "<!-- AUTHOR-ONLY" 2>/dev/null | wc -l | tr -d ' ')
+    AUTHOR_BLOCKS=$(find "$EXTENSIONS_DIR" -name "*.md" -print0 2>/dev/null | xargs -0 grep -c "<!-- AUTHOR-ONLY" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
     set -e
-    [ -z "$AUTHOR_HEADER" ] && AUTHOR_HEADER=0
+    [ -z "$AUTHOR_FILES" ] && AUTHOR_FILES=0
     [ -z "$AUTHOR_BLOCKS" ] && AUTHOR_BLOCKS=0
-    if [ "$AUTHOR_HEADER" -eq 0 ] && [ "$AUTHOR_BLOCKS" -eq 0 ]; then
-        echo "_Авторских/L3-различений не найдено (нормально для нового пилота)_"
+    if [ "$AUTHOR_BLOCKS" -eq 0 ]; then
+        echo "_AUTHOR-ONLY зон не найдено в extensions/ (нормально для нового пилота)_"
     else
-        echo "✅ Найдены маркеры L3:"
-        [ "$AUTHOR_HEADER" -gt 0 ] && echo "- секция \`## Различения (авторские)\` присутствует"
-        [ "$AUTHOR_BLOCKS" -gt 0 ] && echo "- блоков \`<!-- AUTHOR-ONLY -->\`: $AUTHOR_BLOCKS"
+        echo "✅ Найдены маркеры AUTHOR-ONLY в extensions/:"
+        echo "- файлов с маркерами: $AUTHOR_FILES"
+        echo "- блоков \`<!-- AUTHOR-ONLY -->\`: $AUTHOR_BLOCKS"
+    fi
+fi
+echo ""
+
+# 4d. USER-SPACE zones in L1 FMT skills
+echo "### USER-SPACE зоны в L1-скиллах"
+echo ""
+FMT_SKILLS_DIR="$IWE_ROOT/FMT-exocortex-template/.claude/skills"
+if [ ! -d "$FMT_SKILLS_DIR" ]; then
+    echo "_FMT-exocortex-template/ не найден — пропуск_"
+else
+    total_l1=0
+    with_markers=0
+    without_markers=0
+    while IFS= read -r -d '' md_file; do
+        if grep -qE '^layer:[[:space:]]*L1' "$md_file" 2>/dev/null; then
+            total_l1=$((total_l1 + 1))
+            if grep -q '^<!-- USER-SPACE -->' "$md_file" 2>/dev/null; then
+                with_markers=$((with_markers + 1))
+            else
+                without_markers=$((without_markers + 1))
+            fi
+        fi
+    done < <(find "$FMT_SKILLS_DIR" -name "SKILL.md" -print0 2>/dev/null)
+    if [ "$total_l1" -eq 0 ]; then
+        echo "_L1-скиллов не найдено_"
+    elif [ "$without_markers" -eq 0 ]; then
+        echo "✅ USER-SPACE маркеры: $with_markers/$total_l1 L1-скиллов"
+    else
+        echo "⚠️ USER-SPACE маркеры отсутствуют в $without_markers/$total_l1 L1-скиллах"
+        echo "  Запусти: bash \$IWE_ROOT/FMT-exocortex-template/scripts/add-skill-markers.sh"
     fi
 fi
 echo ""
@@ -430,6 +532,86 @@ for bin in git curl python3; do
         UPD_FAIL=$((UPD_FAIL + 1))
     fi
 done
+echo ""
+
+echo "### Доступная память"
+echo ""
+# issue #461 (РП-7 Ф76): PreToolUse hook timeouts на живой установке диагностировались
+# как "хук не ответил", хотя замер (4 хука на пути Edit/Write, суммарно ~1,2с при
+# таймауте в десятки секунд) исключил хуки как причину — реальная причина оказалась
+# голоданием по памяти хост-процесса. Проактивная проверка ловит это ДО того, как
+# отказ проявится посреди ритуала, а не только задним числом в тексте ошибки.
+# Capability-based: PSI (/proc/pressure/memory) — Linux cgroup v2 механизм без
+# кроссплатформенного эквивалента (пир-сессия 2026-08-18-08-wp7-f75-f76-smoke-memory,
+# консенсус с Codex) — macOS получает RAM/swap через vm_stat/sysctl без PSI-аналога,
+# не притворный суррогат.
+MEM_WARN_THRESHOLD_PCT=15  # свободно < 15% от total — предупреждение, не жёсткий блок
+case "$(uname)" in
+    Linux)
+        if [ -r /proc/meminfo ]; then
+            MEM_TOTAL_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+            MEM_AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+            if [ -n "$MEM_TOTAL_KB" ] && [ -n "$MEM_AVAIL_KB" ] && [ "$MEM_TOTAL_KB" -gt 0 ]; then
+                MEM_AVAIL_PCT=$((MEM_AVAIL_KB * 100 / MEM_TOTAL_KB))
+                MEM_TOTAL_GIB=$(awk -v kb="$MEM_TOTAL_KB" 'BEGIN{printf "%.1f", kb/1024/1024}')
+                MEM_AVAIL_GIB=$(awk -v kb="$MEM_AVAIL_KB" 'BEGIN{printf "%.1f", kb/1024/1024}')
+                if [ "$MEM_AVAIL_PCT" -lt "$MEM_WARN_THRESHOLD_PCT" ]; then
+                    echo "⚠️ Свободно ${MEM_AVAIL_GIB} ГиБ из ${MEM_TOTAL_GIB} ГиБ (${MEM_AVAIL_PCT}%) — ниже порога ${MEM_WARN_THRESHOLD_PCT}%. Отказы инструментов записи/чтения с сообщением \`PreToolUse hook did not respond\` при таком уровне памяти — известный класс (issue #461), не обязательно проблема хуков."
+                    UPD_WARN=$((UPD_WARN + 1))
+                else
+                    echo "✅ Свободно ${MEM_AVAIL_GIB} ГиБ из ${MEM_TOTAL_GIB} ГиБ (${MEM_AVAIL_PCT}%)"
+                fi
+            else
+                echo "ℹ️ Не удалось разобрать \`/proc/meminfo\` (MemTotal/MemAvailable)."
+            fi
+            if [ -r /proc/pressure/memory ]; then
+                PSI_SOME=$(awk '/^some/{for(i=1;i<=NF;i++) if ($i ~ /^avg60=/) print $i}' /proc/pressure/memory | cut -d= -f2)
+                if [ -n "$PSI_SOME" ]; then
+                    echo "ℹ️ Memory pressure (PSI avg60, some): ${PSI_SOME}%"
+                fi
+            fi
+        else
+            echo "ℹ️ \`/proc/meminfo\` недоступен — проверка памяти пропущена."
+        fi
+        ;;
+    Darwin)
+        set +e
+        MEM_TOTAL_BYTES=$(sysctl -n hw.memsize 2>/dev/null)
+        VM_STAT_OUT=$(vm_stat 2>/dev/null)
+        set -e
+        if [ -n "$MEM_TOTAL_BYTES" ] && [ "$MEM_TOTAL_BYTES" -gt 0 ] && [ -n "$VM_STAT_OUT" ]; then
+            PAGE_SIZE=$(echo "$VM_STAT_OUT" | head -1 | grep -oE '[0-9]+' | head -1)
+            PAGE_SIZE=${PAGE_SIZE:-4096}
+            PAGES_FREE=$(echo "$VM_STAT_OUT" | awk '/Pages free:/{gsub(/\./,"",$3); print $3}')
+            PAGES_INACTIVE=$(echo "$VM_STAT_OUT" | awk '/Pages inactive:/{gsub(/\./,"",$3); print $3}')
+            if [ -n "$PAGES_FREE" ] && [ -n "$PAGES_INACTIVE" ]; then
+                MEM_AVAIL_BYTES=$(( (PAGES_FREE + PAGES_INACTIVE) * PAGE_SIZE ))
+                MEM_AVAIL_PCT=$((MEM_AVAIL_BYTES * 100 / MEM_TOTAL_BYTES))
+                MEM_TOTAL_GIB=$(awk -v b="$MEM_TOTAL_BYTES" 'BEGIN{printf "%.1f", b/1024/1024/1024}')
+                MEM_AVAIL_GIB=$(awk -v b="$MEM_AVAIL_BYTES" 'BEGIN{printf "%.1f", b/1024/1024/1024}')
+                if [ "$MEM_AVAIL_PCT" -lt "$MEM_WARN_THRESHOLD_PCT" ]; then
+                    echo "⚠️ Свободно+inactive ${MEM_AVAIL_GIB} ГиБ из ${MEM_TOTAL_GIB} ГиБ (${MEM_AVAIL_PCT}%) — ниже порога ${MEM_WARN_THRESHOLD_PCT}%. Отказы инструментов записи/чтения с сообщением \`PreToolUse hook did not respond\` при таком уровне памяти — известный класс (issue #461), не обязательно проблема хуков."
+                    UPD_WARN=$((UPD_WARN + 1))
+                else
+                    echo "✅ Свободно+inactive ${MEM_AVAIL_GIB} ГиБ из ${MEM_TOTAL_GIB} ГиБ (${MEM_AVAIL_PCT}%)"
+                fi
+            else
+                echo "ℹ️ Не удалось разобрать вывод \`vm_stat\` (Pages free/inactive)."
+            fi
+        else
+            echo "ℹ️ \`sysctl hw.memsize\`/\`vm_stat\` недоступны — проверка памяти пропущена."
+        fi
+        set +e
+        SWAP_USED=$(sysctl -n vm.swapusage 2>/dev/null | grep -oE 'used = [0-9.]+[MG]' | grep -oE '[0-9.]+[MG]')
+        set -e
+        if [ -n "$SWAP_USED" ]; then
+            echo "ℹ️ Своп использован: ${SWAP_USED}"
+        fi
+        ;;
+    *)
+        echo "ℹ️ Проверка памяти не реализована для платформы $(uname)."
+        ;;
+esac
 echo ""
 
 echo "### Конфигурация (.exocortex.env)"

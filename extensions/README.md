@@ -6,7 +6,7 @@
 
 ## Dry-run контракт (БЛОКИРУЮЩЕЕ для extensions)
 
-> **Полный контракт:** [memory/dry-run-contract.md](../memory/dry-run-contract.md). Когда `/audit-installation` smoke-тестит ритуал, он создаёт sentinel `/tmp/iwe-dry-run-${SESSION_ID}.flag` и ожидает, что **никто не пишет**.
+> **Полный контракт:** [memory/dry-run-contract.md](../memory/dry-run-contract.md). Когда `/audit-installation` smoke-тестит ритуал, он создаёт sentinel `/tmp/iwe-dry-run.flag` (единый файл, не session-bound — issue #237) и ожидает, что **никто не пишет**.
 
 PreToolUse-хук `dry-run-gate.sh` блокирует Write/Edit/git-write/MCP-write автоматически. Но **extensions, которые запускают собственный bash или вызывают exotic tools** (бинарные API, прямой psql) — могут обойти хук.
 
@@ -15,8 +15,7 @@ PreToolUse-хук `dry-run-gate.sh` блокирует Write/Edit/git-write/MCP-
 Если extension содержит write-логику (создание файла, INSERT в БД, отправка сообщения), **в начале** должна быть проверка sentinel:
 
 ```bash
-SID="${CLAUDE_SESSION_ID:-noid}"
-if [ -f "/tmp/iwe-dry-run-${SID}.flag" ]; then
+if [ -f "/tmp/iwe-dry-run.flag" ]; then
     echo "[extension <name>] dry-run active, skipping write steps"
     exit 0
 fi
@@ -198,6 +197,24 @@ cp my-extension-pack/extensions/* ~/IWE/extensions/
 После `update.sh` эти серверы появятся в `.mcp.json`. Требуется `jq` (`brew install jq`).
 
 **Важно:** `update.sh` не трогает `extensions/mcp-user.json` — ваши MCP в безопасности при обновлениях.
+
+## Фильтрация контекста Kimi (.agentigore)
+
+Файл `.agentigore` в корне репо управляет тем, что Kimi **не видит** как контекст при работе через `kimi-peer-adapter.sh`. Синтаксис как у `.gitignore`.
+
+**Важно:** имя файла — `.agentigore` (не `.agentignore`). Именно это имя читает `kimi-peer-adapter.sh`.
+
+Чтобы создать файл, скопируй образец:
+```bash
+cp extensions/agentigore.sample .agentigore
+```
+
+Три уровня приоритета:
+- **LEVEL-1** — секреты и приватное (`.secrets/`, `personal/`): всегда игнорировать
+- **LEVEL-2** — тяжёлый контекст (`docs/`, `archive/`): игнорировать без прямой задачи
+- **LEVEL-3** — по умолчанию включён: не добавлять без причины
+
+Файл `.agentigore` не влияет на git — только на Kimi. `update.sh` его не затрагивает.
 
 ## Правила
 
