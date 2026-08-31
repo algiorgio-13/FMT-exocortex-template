@@ -30,29 +30,6 @@ log() {
 
 # === Обнаружение Downstream-репо ===
 
-# Extra scan roots declared by the pilot in params.yaml (key: code_scan_paths,
-# a list of directories or globs). The DS-*/ convention below only finds repos
-# that sit next to the governance repo; a pilot whose working repos live
-# elsewhere got "0 repos, 0 commits" with no hint that anything was missing.
-# Silent no-op when python3/pyyaml or the key is absent — same soft-degrade
-# contract as scripts/day-close.sh uses for linear_sync_path.
-extra_scan_globs() {
-    local params="$WORKSPACE/params.yaml"
-    [ -f "$params" ] || return 0
-    command -v python3 >/dev/null 2>&1 || return 0
-    python3 -c '
-import sys
-try:
-    import yaml
-except ImportError:
-    sys.exit(0)
-data = yaml.safe_load(open(sys.argv[1])) or {}
-for entry in (data.get("code_scan_paths") or []):
-    if entry:
-        print(entry)
-' "$params" 2>/dev/null || true
-}
-
 discover_repos() {
     local repos=()
 
@@ -73,22 +50,7 @@ discover_repos() {
         repos+=("$dir")
     done
 
-    local glob expanded
-    while IFS= read -r glob; do
-        [ -n "$glob" ] || continue
-        glob="${glob/#\~/$HOME}"
-        # Unquoted on purpose: the pilot writes globs like ~/Code/cism/*.
-        for expanded in $glob; do
-            [ -d "$expanded/.git" ] || continue
-            repos+=("${expanded%/}/")
-        done
-    done < <(extra_scan_globs)
-
-    # bash 3.2 (stock /bin/bash on macOS) treats "${empty[@]}" as an unbound
-    # variable under set -u, so an empty result aborted the whole scan instead
-    # of reporting "nothing to scan".
-    [ ${#repos[@]} -gt 0 ] || return 0
-    printf '%s\n' "${repos[@]}" | sort -u
+    printf '%s\n' "${repos[@]}"
 }
 
 # === Основной цикл ===

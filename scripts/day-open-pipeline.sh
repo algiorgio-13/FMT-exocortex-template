@@ -14,10 +14,15 @@
 set -uo pipefail
 
 DS_STRATEGY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IWE="${IWE_ROOT:-$(cd "$DS_STRATEGY/.." && pwd)}"
+IWE="$(cd "$DS_STRATEGY/.." && pwd)"
 # Child patch steps (4.2/4.3) fall back to ~/IWE when IWE_ROOT is unset —
 # a launchd/cron env typically has no IWE_ROOT, so pass the resolved root down.
 export IWE_ROOT="$IWE"
+# Every child process, including the background snapshot refresh below, must
+# resolve the same governance repository as this pipeline. launchd/cron do not
+# inherit the interactive shell setting, so derive it from the script location
+# before the first child process starts.
+export IWE_GOVERNANCE_REPO="$(basename "$DS_STRATEGY")"
 CONFIG="$DS_STRATEGY/exocortex/day-rhythm-config.yaml"
 # shellcheck source=lib/ledger-path.sh
 . "$DS_STRATEGY/scripts/lib/ledger-path.sh"
@@ -334,6 +339,26 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# ============================================
+# 0. Extension graph — "before" hooks (WP-529 Ф11)
+# ============================================
+# extensions/day-open.before*.md — same bash-block-in-Markdown mechanism as
+# the existing "checks" hook (day-open-checks-runner.sh), so it runs
+# correctly unattended under launchd/cron with no LLM in the loop. No files
+# present → day-open-hooks-runner.sh no-ops silently (most installs won't
+# have one). A failing "before" hook blocks Day Open the same way a failing
+# "checks" block does — a before-hook can run ahead of and mutate
+# DS_STRATEGY state, so letting its failure through as a soft warning risks
+# committing whatever it left behind (Codex review, 2026-08-28).
+echo "=== 0. Extension graph: before ==="
+BEFORE_HOOK_OUT=$(bash "$DS_STRATEGY/scripts/day-open-hooks-runner.sh" before 2>&1)
+BEFORE_HOOK_EXIT=$?
+echo "$BEFORE_HOOK_OUT"
+if [ $BEFORE_HOOK_EXIT -ne 0 ]; then
+  tg_notify "❌ Day Open aborted: a 'before' extension hook failed for $DATE. See output above."
+  abort "before-hook failed — see output above"
+fi
 
 # ============================================
 # 1. Pre-flight healthcheck
@@ -696,10 +721,6 @@ fi
 mkdir -p "$IWE/.tmp"
 bash "$IWE/scripts/server-calendar.sh" "$DATE" "$CONFIG" > "$CALENDAR_OUT" 2>/dev/null || true
 
-# Export so that day-open-scaffold.sh uses correct repo when run from launchd
-# (launchd doesn't inherit shell env where IWE_GOVERNANCE_REPO is set via .zshrc)
-export IWE_GOVERNANCE_REPO="${IWE_GOVERNANCE_REPO:-$(basename "$DS_STRATEGY")}"
-
 # Generate scaffold to temp file first (for hash guard)
 SCAFFOLD_TEMP="$DAYPLAN_PATH.scaffold.tmp"
 SCAFFOLD_SCRIPT="$IWE/scripts/day-open-scaffold.sh"
@@ -994,6 +1015,23 @@ if [ "$PROBE" != "true" ]; then
   for f in "${ARCHIVED_PATHS[@]+"${ARCHIVED_PATHS[@]}"}"; do
     bash "$IWE/scripts/session-guard.sh" note-file "$ARCHIVE_DIR/$(basename "$f")" --agent "$SG_AGENT" --slug day-open
   done
+fi
+
+# ============================================
+# 4.8. Extension graph — "after" hooks (WP-529 Ф11)
+# ============================================
+# Same mechanism and failure semantics as the "before" hook at the top of
+# this script (see its comment) — runs after DayPlan generation/patches, so
+# a hook that enriches the DayPlan (e.g. extensions/day-open.after.session-
+# orphans.md) sees the final content, and Checks below validates whatever
+# it left behind.
+echo "=== 4.8. Extension graph: after ==="
+AFTER_HOOK_OUT=$(bash "$DS_STRATEGY/scripts/day-open-hooks-runner.sh" after 2>&1)
+AFTER_HOOK_EXIT=$?
+echo "$AFTER_HOOK_OUT"
+if [ $AFTER_HOOK_EXIT -ne 0 ]; then
+  tg_notify "❌ Day Open aborted: an 'after' extension hook failed for $DATE. See output above."
+  abort "after-hook failed — see output above"
 fi
 
 # ============================================

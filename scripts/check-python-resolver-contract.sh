@@ -4,7 +4,7 @@
 # bare python3/python" contract (WP-529 Ф6, #453/#463).
 #
 # NOT a proof of compliance: on 20.08 a real scan of scripts/**/*.sh,
-# setup/**/*.sh, roles/**/*.sh found ~10 pre-existing bare-python3 call sites
+# setup/**/*.sh, roles/**/*.sh found pre-existing bare-python3 call sites
 # unrelated to this phase's two confirmed live bugs (route-task.sh,
 # headless-runner.sh, both already fixed). Auditing whether each of those 10
 # needs PyYAML is a separate follow-up, not this gate's job — this gate only
@@ -12,17 +12,23 @@
 # `path:trimmed-line-content`, not line number, so unrelated edits elsewhere
 # in a baselined file don't cause spurious baseline drift.
 #
-# Scope: scripts/**/*.sh, setup/**/*.sh, roles/**/*.sh (the delivered-shell
-# perimeter, matches docs/critical-files-map.yaml categories). Deliberately
-# NOT .github/workflows/** — different execution context (CI step installs
-# PyYAML explicitly via `pip install`), different format (YAML `run:`, not a
-# .sh file) — a workflow-level equivalent would need its own contract,
-# not shoehorned into this one (peer-session 2026-08-20-28, turn 1-2).
+# Scope: scripts/**/*.{sh,md}, setup/**/*.{sh,md}, roles/**/*.{sh,md},
+# .claude/hooks/**/*.{sh,md}, .claude/skills/**/*.{sh,md} — every delivered
+# shell perimeter that can invoke a repo-owned Python program. The .claude
+# perimeter was missing until issue #521, so all three ResidencyGate adapters
+# escaped the original ratchet. The *.md half was added 26.08 (Evgenii's
+# v0.38.11 letter, WP-529 hvost 3/5, issue #541 context): an agent reading a
+# SKILL.md instruction and running its literal `python3 script.py` line hits
+# the exact same silent-PyYAML-domain-error failure as a bare call inside a
+# .sh file — the contract does not care which file format carried the bare
+# call into an agent's shell. Deliberately NOT .github/workflows/** —
+# different execution context (CI step installs PyYAML explicitly),
+# different format (YAML `run:`, not a .sh/.md file).
 #
-# Known blind spot (documented, not solved): variable-indirected calls like
-# `PY=python3; $PY script.py` are not caught — that needs variable-flow
-# analysis, out of scope for a static grep-gate (peer-session 2026-08-20-28,
-# turn 3, codex).
+# A literal interpreter followed by a dynamic script variable (`python3
+# "$SCRIPT_PY"`) is covered. The remaining documented blind spot is an
+# indirect interpreter (`PY=python3; "$PY" script.py`), which needs variable-
+# flow analysis rather than a static grep gate.
 #
 # Usage:
 #   scripts/check-python-resolver-contract.sh              — check against baseline, exit 1 on new hits
@@ -40,7 +46,15 @@ MODE="${1:-check}"
 # repo-owned `.py` path — NOT preceded by a resolver variable ($PYTHON3,
 # $RESOLVED_PYTHON3, $RESOLVER, etc., since those are variable references,
 # not the literal word "python"/"python3").
-PATTERN='(^|[^$A-Za-z0-9_."'"'"'-])python3?[[:space:]]+"?[A-Za-z0-9_./${}-]*\.py\b'
+# These are regular-expression literals; shell expansion would corrupt them.
+# shellcheck disable=SC2016
+# `~` added 26.08 (issue #541 hvost 3 cold-review): a leading `~/...` path
+# (e.g. `~/IWE/.claude/scripts/fp-stats.py`) fell through this class
+# entirely — same repo-owned-.py risk, just spelled with a home-dir shortcut
+# instead of $HOME or an absolute path.
+LITERAL_PATH_PATTERN='(^|[^$A-Za-z0-9_."'"'"'-])python3?[[:space:]]+"?[A-Za-z0-9_./${}~-]*\.py\b'
+# shellcheck disable=SC2016
+VARIABLE_PATH_PATTERN='(^|[^$A-Za-z0-9_."'"'"'-])python3?[[:space:]]+"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?'
 
 # This gate's own test writes example "bad" python3-calling lines as fixture
 # content inside test_issue_python_resolver_contract.sh — scanning the gate's
@@ -49,12 +63,20 @@ PATTERN='(^|[^$A-Za-z0-9_."'"'"'-])python3?[[:space:]]+"?[A-Za-z0-9_./${}-]*\.py
 SELF_TEST_BASENAME="test_issue_python_resolver_contract.sh"
 
 scan() {
-    grep -rnE "$PATTERN" \
-        "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/setup" "$SCRIPT_DIR/roles" \
-        --include="*.sh" 2>/dev/null \
+    local scan_dirs=(
+        "$SCRIPT_DIR/scripts"
+        "$SCRIPT_DIR/setup"
+        "$SCRIPT_DIR/roles"
+        "$SCRIPT_DIR/.claude/hooks"
+        "$SCRIPT_DIR/.claude/skills"
+    )
+    {
+        grep -rnE "$LITERAL_PATH_PATTERN" "${scan_dirs[@]}" --include="*.sh" --include="*.md" 2>/dev/null || true
+        grep -rnE "$VARIABLE_PATH_PATTERN" "${scan_dirs[@]}" --include="*.sh" --include="*.md" 2>/dev/null || true
+    } \
         | grep -vE ':[0-9]+:[[:space:]]*#' \
         | grep -v "/$SELF_TEST_BASENAME:" \
-        | while IFS=: read -r file line content; do
+        | while IFS=: read -r file _ content; do
             rel="${file#"$SCRIPT_DIR"/}"
             trimmed="$(printf '%s' "$content" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
             printf '%s\t%s\n' "$rel" "$trimmed"
